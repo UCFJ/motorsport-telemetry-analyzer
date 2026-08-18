@@ -18,11 +18,12 @@ from src.analysis.section_detection import (
     extend_section_exits
 )
 
-
-
-from src.analysis.lap_extraction import (
-    extract_acc_completed_laps
+from src.analysis.observations import (
+    calculate_section_observations
 )
+
+
+
 from matplotlib.widgets import CheckButtons, MultiCursor
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
@@ -74,15 +75,80 @@ def format_lap_time(milliseconds):
 
 df = load_shared_memory_csv(CSV_FILE)
 
+max_lap_number = int(
+    df["lap_number"].max()
+)
+
+
 # -------------------------
-# Extract completed ACC laps
+# Extract completed laps
 # -------------------------
 
-laps, lap_info = (
-    extract_acc_completed_laps(
-        df
+laps = {}
+
+for lap_number in range(
+    1,
+    max_lap_number
+):
+
+    lap = df[
+        df["lap_number"] == lap_number
+    ].copy()
+
+    lap = lap.reset_index(
+        drop=True
     )
-)
+
+    laps[lap_number] = lap
+
+
+# -------------------------
+# Build lap information
+# -------------------------
+
+lap_info = []
+
+for lap_number, lap in laps.items():
+
+    is_valid = (
+        lap["is_valid_lap"].all()
+    )
+
+    next_lap = df[
+        df["lap_number"]
+        == lap_number + 1
+    ]
+
+    completed_rows = next_lap[
+        next_lap["completed_laps"]
+        >= lap_number
+    ]
+
+    if completed_rows.empty:
+
+        lap_time_ms = None
+
+    else:
+
+        lap_time_ms = int(
+            completed_rows[
+                "acc_last_lap_ms"
+            ].iloc[0]
+        )
+
+    lap_info.append(
+        {
+            "lap_number":
+                lap_number,
+
+            "lap_time_ms":
+                lap_time_ms,
+
+            "is_valid":
+                is_valid
+        }
+    )
+
 
 
 
@@ -91,8 +157,8 @@ laps, lap_info = (
 # -------------------------
 
 print()
-print("ACC completed laps:")
-print("-------------------")
+print("Complete laps:")
+print("--------------")
 
 for info in lap_info:
 
@@ -107,25 +173,15 @@ for info in lap_info:
         )
 
     validity = (
-        "USABLE"
+        "VALID"
         if info["is_valid"]
-        else "REJECTED"
+        else "INVALID"
     )
 
     print(
         f"Lap {info['lap_number']}: "
-        f"{lap_time} "
-        f"{validity} "
-        f"| ACC completed "
-        f"{info['acc_completed_lap']} "
-        f"| coverage "
-        f"{info['position_coverage']:.3f} "
-        f"| ACC valid "
-        f"{info['acc_valid']} "
-        f"| valid fraction "
-        f"{info['valid_fraction']:.4f} "
-        f"| jump "
-        f"{info['max_jump_m']:.1f} m"
+        f"{lap_time}  "
+        f"{validity}"
     )
 
 # -------------------------
@@ -780,7 +836,218 @@ delta_times = calculate_deltas(
 
 
 
+# -------------------------
+# Section observations
+# -------------------------
 
+all_observations = {}
+
+for info in valid_lap_info:
+
+    lap_number = info[
+        "lap_number"
+    ]
+
+    if (
+        lap_number
+        == best_lap_number
+    ):
+        continue
+
+    aligned = aligned_laps[
+        lap_number
+    ]
+
+    lap_observations = []
+
+    for section in analysis_sections:
+
+        observation = (
+            calculate_section_observations(
+                aligned,
+                reference_line,
+                section,
+                reference_geometry,
+                delta_times[
+                    lap_number
+                ]
+            )
+        )
+
+        lap_observations.append(
+            observation
+        )
+
+    all_observations[
+        lap_number
+    ] = lap_observations
+
+
+
+print()
+print("Section observations:")
+print("=====================")
+
+for (
+    lap_number,
+    observations
+) in all_observations.items():
+
+    print()
+    print(
+        f"Lap {lap_number} "
+        f"vs reference "
+        f"Lap {best_lap_number}"
+    )
+
+    print(
+        "-----------------------------"
+    )
+
+    for observation in observations:
+
+        print()
+        print(
+            f"Section "
+            f"{observation['section_number']}"
+        )
+
+        print(
+            f"  Section delta: "
+            f"{observation['section_delta_s']:+.3f} s"
+        )
+
+        print(
+            f"  Minimum speed: "
+            f"{observation['min_speed_difference_kmh']:+.1f} km/h"
+        )
+
+
+        # -------------------------
+        # Brake behavior
+        # -------------------------
+
+        print(
+            f"  Brake applications: "
+            f"{observation['lap_brake_application_count']} "
+            f"(ref "
+            f"{observation['reference_brake_application_count']})"
+        )
+
+        if (
+            observation[
+                "brake_onset_difference_m"
+            ]
+            is None
+        ):
+
+            print(
+                "  Initial brake onset: "
+                "no comparable braking event"
+            )
+
+        else:
+
+            print(
+                f"  Initial brake onset: "
+                f"{observation['brake_onset_difference_m']:+.1f} m"
+            )
+
+
+        if (
+            observation[
+                "brake_release_difference_m"
+            ]
+            is None
+        ):
+
+            print(
+                "  Final brake release: "
+                "no comparable braking event"
+            )
+
+        else:
+
+            print(
+                f"  Final brake release: "
+                f"{observation['brake_release_difference_m']:+.1f} m"
+            )
+
+
+        # -------------------------
+        # Throttle behavior
+        # -------------------------
+
+        print(
+            f"  Throttle applications: "
+            f"{observation['lap_throttle_application_count']} "
+            f"(ref "
+            f"{observation['reference_throttle_application_count']})"
+        )
+
+        lap_full_lift_text = (
+            "Yes"
+            if observation["lap_full_lift"]
+            else "No"
+        )
+
+        reference_full_lift_text = (
+            "Yes"
+            if observation["reference_full_lift"]
+            else "No"
+        )
+
+        print(
+            f"  Full lift: "
+            f"{lap_full_lift_text} "
+            f"(ref "
+            f"{reference_full_lift_text})"
+        )
+
+
+        if (
+            not observation[
+                "lap_throttle_interrupted"
+            ]
+            and
+            not observation[
+                "reference_throttle_interrupted"
+            ]
+        ):
+
+            print(
+                "  Final throttle commitment: "
+                "no throttle interruption"
+            )
+
+        elif (
+            observation[
+                "final_throttle_difference_m"
+            ]
+            is None
+        ):
+
+            print(
+                "  Final throttle commitment: "
+                "no comparable event"
+            )
+
+        else:
+
+            print(
+                f"  Final throttle commitment: "
+                f"{observation['final_throttle_difference_m']:+.1f} m"
+            )
+
+
+        # -------------------------
+        # Racing line
+        # -------------------------
+
+        print(
+            f"  Peak line deviation: "
+            f"{observation['peak_line_deviation_m']:+.2f} m"
+        )
 # -------------------------
 # Delta comparison
 # -------------------------
@@ -943,6 +1210,56 @@ apply_dark_style(
 
 
 # -------------------------
+# Analysis section markers
+# -------------------------
+
+for section in analysis_sections:
+
+    start_pct = (
+        section["start_position"]
+        * 100
+    )
+
+    end_pct = (
+        section["end_position"]
+        * 100
+    )
+
+    for ax in axes:
+
+        ax.axvspan(
+            start_pct,
+            end_pct,
+            color="white",
+            alpha=0.035,
+            zorder=0
+        )
+
+    for section in analysis_sections:
+    
+        middle_pct = (
+            (
+                section["start_position"]
+                + section["end_position"]
+            )
+            / 2
+            * 100
+        )
+    
+        ax_speed.text(
+            middle_pct,
+            0.97,
+            f"S{section['section_number']}",
+            transform=ax_speed.get_xaxis_transform(),
+            color="white",
+            fontsize=8,
+            fontweight="bold",
+            ha="center",
+            va="top"
+        )
+
+
+# -------------------------
 # Racing-line deviation
 # -------------------------
 
@@ -1046,10 +1363,103 @@ ax_line.set_aspect(
     adjustable="datalim"
 )
 
+ax_line.invert_yaxis()
+
 apply_dark_style(
     fig,
     ax_line
 )
+
+
+# -------------------------
+# Section labels on track map
+# -------------------------
+
+track_center_x = (
+    np.min(reference_line["world_x"])
+    + np.max(reference_line["world_x"])
+) / 2
+
+
+for section in analysis_sections:
+
+    middle_position = (
+        section["core_start_position"]
+        + section["core_end_position"]
+    ) / 2
+
+    middle_index = np.argmin(
+        np.abs(
+            reference_line["normalized_position"]
+            - middle_position
+        )
+    )
+
+    section_x = reference_line[
+        "world_x"
+    ][middle_index]
+
+    section_z = reference_line[
+        "world_z"
+    ][middle_index]
+
+
+    # -------------------------
+    # Put label outside track
+    # -------------------------
+
+    if section_x >= track_center_x:
+
+        label_offset = (
+            12,
+            0
+        )
+
+        horizontal_alignment = "left"
+
+    else:
+
+        label_offset = (
+            -12,
+            0
+        )
+
+        horizontal_alignment = "right"
+
+
+    ax_line.annotate(
+        f"S{section['section_number']}",
+
+        xy=(
+            section_x,
+            section_z
+        ),
+
+        xytext=label_offset,
+
+        textcoords="offset points",
+
+        color="white",
+        fontsize=9,
+        fontweight="bold",
+
+        ha=horizontal_alignment,
+        va="center",
+
+        bbox={
+            "facecolor": "black",
+            "edgecolor": "white",
+            "boxstyle": "round,pad=0.2",
+            "alpha": 0.8
+        },
+
+        annotation_clip=False,
+        zorder=10
+    )
+
+    
+
+
 
 line_legend = ax_line.legend()
 
@@ -1248,6 +1658,51 @@ for label in graph_selector.labels:
     label.set_color("white")
     label.set_fontsize(8)
 
+cursor = None
+
+
+def rebuild_cursor():
+
+    global cursor
+
+    # Remove old cursor
+    if cursor is not None:
+
+        cursor.disconnect()
+
+        for line in cursor.vlines:
+            line.remove()
+
+        for line in cursor.hlines:
+            line.remove()
+
+    # Only attach cursor to visible
+    # telemetry graphs
+    cursor_axes = [
+        ax
+        for ax in axes
+        if ax.get_visible()
+    ]
+
+    # All telemetry graphs may be hidden
+    if not cursor_axes:
+
+        cursor = None
+        fig.canvas.draw_idle()
+        return
+
+    cursor = MultiCursor(
+        cursor_axes,
+        useblit=True,
+        horizOn=False,
+        vertOn=True,
+        color="white",
+        linestyle=":",
+        linewidth=1
+    )
+
+    fig.canvas.draw_idle()
+
 def toggle_graph(label):
 
     ax = graph_axes[label]
@@ -1258,7 +1713,7 @@ def toggle_graph(label):
 
     reflow_graphs()
 
-    fig.canvas.draw_idle()
+    rebuild_cursor()
 
 
 graph_selector.on_clicked(
@@ -1433,14 +1888,7 @@ reflow_graphs()
 # Synchronized cursor
 # -------------------------
 
-cursor = MultiCursor(
-    axes,
-    useblit=True,
-    horizOn=False,
-    vertOn=True,
-    color="white",
-    linestyle=":",
-    linewidth=1
-)
+rebuild_cursor()
+
 
 plt.show()

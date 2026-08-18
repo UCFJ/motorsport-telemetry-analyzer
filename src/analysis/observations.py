@@ -1,0 +1,606 @@
+import numpy as np
+
+
+def find_first_threshold_crossing(
+    values,
+    start_index,
+    end_index,
+    threshold
+):
+
+    for i in range(
+        start_index,
+        end_index + 1
+    ):
+
+        if values[i] >= threshold:
+            return i
+
+    return None
+
+
+
+def detect_throttle_applications(
+    throttle,
+    distance,
+    start_index,
+    end_index,
+    low_threshold=0.10,
+    application_threshold=0.20,
+    sustain_distance_m=8.0
+):
+
+    applications = []
+
+    ready_for_application = (
+        throttle[start_index]
+        <= low_threshold
+    )
+
+    for i in range(
+        start_index + 1,
+        end_index + 1
+    ):
+
+        if throttle[i] <= low_threshold:
+
+            ready_for_application = True
+            continue
+
+        if not ready_for_application:
+            continue
+
+        if (
+            throttle[i]
+            < application_threshold
+        ):
+            continue
+
+        sustain_end_distance = (
+            distance[i]
+            + sustain_distance_m
+        )
+
+        sustain_end = np.searchsorted(
+            distance,
+            sustain_end_distance
+        )
+
+        sustain_end = min(
+            sustain_end,
+            end_index
+        )
+
+        segment = throttle[
+            i:sustain_end + 1
+        ]
+
+        if len(segment) == 0:
+            continue
+
+        active_fraction = np.mean(
+            segment
+            >= application_threshold
+        )
+
+        if active_fraction >= 0.70:
+
+            applications.append(i)
+
+            ready_for_application = False
+
+    return applications
+
+
+
+def find_final_throttle_commitment(
+    throttle,
+    start_index,
+    end_index,
+    high_threshold=0.90,
+    hold_threshold=0.85
+):
+
+    section_throttle = throttle[
+        start_index:end_index + 1
+    ]
+
+    if len(section_throttle) == 0:
+        return None
+
+    # Already essentially full throttle
+    # through the whole section.
+    if np.min(
+        section_throttle
+    ) >= hold_threshold:
+
+        return None
+
+    # Section does not finish at
+    # meaningful full throttle.
+    if (
+        throttle[end_index]
+        < high_threshold
+    ):
+
+        return None
+
+    run_start = end_index
+
+    while (
+        run_start > start_index
+        and
+        throttle[run_start - 1]
+        >= hold_threshold
+    ):
+
+        run_start -= 1
+
+    for i in range(
+        run_start,
+        end_index + 1
+    ):
+
+        if (
+            throttle[i]
+            >= high_threshold
+        ):
+
+            return i
+
+    return None
+
+
+
+def calculate_section_observations(
+    aligned_lap,
+    reference_lap,
+    section,
+    reference_geometry,
+    delta,
+    brake_threshold=0.10,
+    search_margin_m=150.0
+):
+
+    distance = reference_geometry[
+        "distance_m"
+    ]
+
+    core_start = section[
+        "core_start_index"
+    ]
+
+    section_start = section[
+        "start_index"
+    ]
+
+    section_end = section[
+        "end_index"
+    ]
+
+    # -------------------------
+    # Search window before entry
+    # -------------------------
+
+    search_start_distance = max(
+        0.0,
+        distance[core_start]
+        - search_margin_m
+    )
+
+    search_start = np.searchsorted(
+        distance,
+        search_start_distance
+    )
+
+    # -------------------------
+    # Section time difference
+    # -------------------------
+
+    section_delta_s = (
+        delta[section_end]
+        - delta[section_start]
+    )
+
+    # -------------------------
+    # Minimum speed
+    # -------------------------
+
+    reference_min_speed = np.min(
+        reference_lap[
+            "speed_kmh"
+        ][section_start:section_end + 1]
+    )
+
+    lap_min_speed = np.min(
+        aligned_lap[
+            "speed_kmh"
+        ][section_start:section_end + 1]
+    )
+
+    min_speed_difference = (
+        lap_min_speed
+        - reference_min_speed
+    )
+
+    # -------------------------
+    # Brake behavior
+    # -------------------------
+    
+    reference_brake_events = (
+        detect_brake_events(
+            reference_lap["brake"],
+            distance,
+            search_start,
+            section_end
+        )
+    )
+    
+    lap_brake_events = (
+        detect_brake_events(
+            aligned_lap["brake"],
+            distance,
+            search_start,
+            section_end
+        )
+    )
+    
+    
+    # -------------------------
+    # Initial brake onset
+    # -------------------------
+    
+    if (
+        len(reference_brake_events) > 0
+        and
+        len(lap_brake_events) > 0
+    ):
+    
+        reference_initial_brake = (
+            reference_brake_events[0][
+                "start_index"
+            ]
+        )
+    
+        lap_initial_brake = (
+            lap_brake_events[0][
+                "start_index"
+            ]
+        )
+    
+        brake_onset_difference_m = (
+            distance[
+                lap_initial_brake
+            ]
+            -
+            distance[
+                reference_initial_brake
+            ]
+        )
+    
+    else:
+    
+        brake_onset_difference_m = None
+    
+    
+    # -------------------------
+    # Final brake release
+    # -------------------------
+    
+    if (
+        len(reference_brake_events) > 0
+        and
+        len(lap_brake_events) > 0
+    ):
+    
+        reference_final_release = (
+            reference_brake_events[-1][
+                "end_index"
+            ]
+        )
+    
+        lap_final_release = (
+            lap_brake_events[-1][
+                "end_index"
+            ]
+        )
+    
+        brake_release_difference_m = (
+            distance[
+                lap_final_release
+            ]
+            -
+            distance[
+                reference_final_release
+            ]
+        )
+    
+    else:
+    
+        brake_release_difference_m = None
+
+    # -------------------------
+    # Throttle behavior
+    # -------------------------
+    
+    reference_throttle = (
+        reference_lap["throttle"]
+    )
+    
+    lap_throttle = (
+        aligned_lap["throttle"]
+    )
+    
+    
+    reference_throttle_applications = (
+        detect_throttle_applications(
+            reference_throttle,
+            distance,
+            section_start,
+            section_end
+        )
+    )
+    
+    lap_throttle_applications = (
+        detect_throttle_applications(
+            lap_throttle,
+            distance,
+            section_start,
+            section_end
+        )
+    )
+    
+    
+    reference_full_lift = (
+        np.min(
+            reference_throttle[
+                section_start:
+                section_end + 1
+            ]
+        )
+        <= 0.10
+    )
+    
+    lap_full_lift = (
+        np.min(
+            lap_throttle[
+                section_start:
+                section_end + 1
+            ]
+        )
+        <= 0.10
+    )
+    
+    
+    reference_throttle_interrupted = (
+        np.min(
+            reference_throttle[
+                section_start:
+                section_end + 1
+            ]
+        )
+        < 0.85
+    )
+    
+    lap_throttle_interrupted = (
+        np.min(
+            lap_throttle[
+                section_start:
+                section_end + 1
+            ]
+        )
+        < 0.85
+    )
+    
+    
+    reference_final_throttle = (
+        find_final_throttle_commitment(
+            reference_throttle,
+            section_start,
+            section_end
+        )
+    )
+    
+    lap_final_throttle = (
+        find_final_throttle_commitment(
+            lap_throttle,
+            section_start,
+            section_end
+        )
+    )
+    
+    
+    if (
+        reference_final_throttle is not None
+        and
+        lap_final_throttle is not None
+    ):
+    
+        final_throttle_difference_m = (
+            distance[
+                lap_final_throttle
+            ]
+            -
+            distance[
+                reference_final_throttle
+            ]
+        )
+    
+    else:
+    
+        final_throttle_difference_m = None
+   
+
+    # -------------------------
+    # Racing-line deviation
+    # -------------------------
+
+    line_deviation = aligned_lap[
+        "line_deviation_m"
+    ][section_start:section_end + 1]
+
+    if len(line_deviation) > 0:
+
+        peak_local_index = np.argmax(
+            np.abs(
+                line_deviation
+            )
+        )
+
+        peak_line_deviation_m = (
+            line_deviation[
+                peak_local_index
+            ]
+        )
+
+    else:
+
+        peak_line_deviation_m = 0.0
+
+    return {
+        "section_number":
+            section["section_number"],
+    
+        "section_delta_s":
+            section_delta_s,
+    
+        "min_speed_difference_kmh":
+            min_speed_difference,
+
+        "brake_onset_difference_m":
+            brake_onset_difference_m,
+    
+        "reference_brake_application_count":
+            len(reference_brake_events),
+        
+        "lap_brake_application_count":
+            len(lap_brake_events),
+        
+        "brake_onset_difference_m":
+            brake_onset_difference_m,
+        
+        "brake_release_difference_m":
+            brake_release_difference_m,
+    
+        "reference_throttle_application_count":
+            len(
+                reference_throttle_applications
+            ),
+    
+        "lap_throttle_application_count":
+            len(
+                lap_throttle_applications
+            ),
+    
+        "reference_full_lift":
+            reference_full_lift,
+    
+        "lap_full_lift":
+            lap_full_lift,
+    
+        "reference_throttle_interrupted":
+            reference_throttle_interrupted,
+    
+        "lap_throttle_interrupted":
+            lap_throttle_interrupted,
+    
+        "final_throttle_difference_m":
+            final_throttle_difference_m,
+    
+        "peak_line_deviation_m":
+            peak_line_deviation_m
+    }
+
+
+def detect_brake_events(
+    brake,
+    distance,
+    start_index,
+    end_index,
+    threshold=0.10,
+    release_distance_m=5.0
+):
+
+    events = []
+
+    in_event = False
+    event_start = None
+
+    i = start_index
+
+    while i <= end_index:
+
+        if not in_event:
+
+            if brake[i] >= threshold:
+
+                in_event = True
+                event_start = i
+
+            i += 1
+            continue
+
+
+        # Currently inside a braking event
+        if brake[i] > threshold:
+
+            i += 1
+            continue
+
+
+        release_end_distance = (
+            distance[i]
+            + release_distance_m
+        )
+
+        release_end = np.searchsorted(
+            distance,
+            release_end_distance
+        )
+
+        release_end = min(
+            release_end,
+            end_index
+        )
+
+        release_segment = brake[
+            i:release_end + 1
+        ]
+
+        released_fraction = np.mean(
+            release_segment <= threshold
+        )
+
+        if released_fraction >= 0.80:
+
+            events.append({
+                "start_index":
+                    event_start,
+
+                "end_index":
+                    i
+            })
+
+            in_event = False
+            event_start = None
+
+        i += 1
+
+
+    # Brake still active at section end
+    if (
+        in_event
+        and
+        event_start is not None
+    ):
+
+        events.append({
+            "start_index":
+                event_start,
+
+            "end_index":
+                end_index
+        })
+
+
+    return events

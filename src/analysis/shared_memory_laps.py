@@ -929,6 +929,11 @@ for (
             f"{observation['min_speed_difference_kmh']:+.1f} km/h"
         )
 
+        print(
+            f"  Section end speed: "
+            f"{observation['section_end_speed_difference_kmh']:+.1f} km/h"
+        )
+
 
         # -------------------------
         # Brake behavior
@@ -1021,31 +1026,57 @@ for (
                 "reference_throttle_interrupted"
             ]
         ):
-
+        
             print(
-                "  Final throttle commitment: "
+                "  Final throttle application onset: "
                 "no throttle interruption"
             )
-
-        elif (
-            observation[
-                "final_throttle_difference_m"
-            ]
-            is None
-        ):
-
+        
             print(
-                "  Final throttle commitment: "
-                "no comparable event"
+                "  Full throttle reached: "
+                "no throttle interruption"
             )
-
+        
         else:
-
-            print(
-                f"  Final throttle commitment: "
-                f"{observation['final_throttle_difference_m']:+.1f} m"
-            )
-
+        
+            if (
+                observation[
+                    "final_throttle_onset_difference_m"
+                ]
+                is None
+            ):
+        
+                print(
+                    "  Final throttle application onset: "
+                    "no comparable event"
+                )
+        
+            else:
+        
+                print(
+                    f"  Final throttle application onset: "
+                    f"{observation['final_throttle_onset_difference_m']:+.1f} m"
+                )
+        
+        
+            if (
+                observation[
+                    "full_throttle_difference_m"
+                ]
+                is None
+            ):
+        
+                print(
+                    "  Full throttle reached: "
+                    "no comparable event"
+                )
+        
+            else:
+        
+                print(
+                    f"  Full throttle reached: "
+                    f"{observation['full_throttle_difference_m']:+.1f} m"
+                )
 
         # -------------------------
         # Racing line

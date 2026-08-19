@@ -152,6 +152,53 @@ def find_final_throttle_commitment(
 
 
 
+def find_final_throttle_application_onset(
+    throttle,
+    throttle_applications,
+    end_index,
+    high_threshold=0.90,
+    exit_hold_threshold=0.85
+):
+
+    if len(throttle_applications) == 0:
+        return None
+
+    for application_index in reversed(
+        throttle_applications
+    ):
+
+        remaining_throttle = throttle[
+            application_index:
+            end_index + 1
+        ]
+
+        if len(remaining_throttle) == 0:
+            continue
+
+        reaches_high_throttle = (
+            np.max(
+                remaining_throttle
+            )
+            >= high_threshold
+        )
+
+        finishes_on_throttle = (
+            throttle[end_index]
+            >= exit_hold_threshold
+        )
+
+        if (
+            reaches_high_throttle
+            and
+            finishes_on_throttle
+        ):
+
+            return application_index
+
+    return None
+
+
+
 def calculate_section_observations(
     aligned_lap,
     reference_lap,
@@ -223,6 +270,24 @@ def calculate_section_observations(
         - reference_min_speed
     )
 
+
+
+    # -------------------------
+    # Section end speed
+    # -------------------------
+    
+    section_end_speed_difference = (
+        aligned_lap[
+            "speed_kmh"
+        ][section_end]
+        -
+        reference_lap[
+            "speed_kmh"
+        ][section_end]
+    )
+
+
+    
     # -------------------------
     # Brake behavior
     # -------------------------
@@ -416,7 +481,7 @@ def calculate_section_observations(
         lap_final_throttle is not None
     ):
     
-        final_throttle_difference_m = (
+        full_throttle_difference_m = (
             distance[
                 lap_final_throttle
             ]
@@ -428,8 +493,51 @@ def calculate_section_observations(
     
     else:
     
-        final_throttle_difference_m = None
+        full_throttle_difference_m = None
    
+
+
+
+    reference_final_throttle_onset = (
+        find_final_throttle_application_onset(
+            reference_throttle,
+            reference_throttle_applications,
+            section_end
+        )
+    )
+    
+    lap_final_throttle_onset = (
+        find_final_throttle_application_onset(
+            lap_throttle,
+            lap_throttle_applications,
+            section_end
+        )
+    )
+    
+    
+    if (
+        reference_final_throttle_onset
+        is not None
+        and
+        lap_final_throttle_onset
+        is not None
+    ):
+    
+        final_throttle_onset_difference_m = (
+            distance[
+                lap_final_throttle_onset
+            ]
+            -
+            distance[
+                reference_final_throttle_onset
+            ]
+        )
+    
+    else:
+    
+        final_throttle_onset_difference_m = None
+
+
 
     # -------------------------
     # Racing-line deviation
@@ -467,6 +575,9 @@ def calculate_section_observations(
         "min_speed_difference_kmh":
             min_speed_difference,
 
+        "section_end_speed_difference_kmh":
+            section_end_speed_difference,
+            
         "brake_onset_difference_m":
             brake_onset_difference_m,
     
@@ -504,12 +615,16 @@ def calculate_section_observations(
         "lap_throttle_interrupted":
             lap_throttle_interrupted,
     
-        "final_throttle_difference_m":
-            final_throttle_difference_m,
+        "final_throttle_onset_difference_m":
+            final_throttle_onset_difference_m,
+        
+        "full_throttle_difference_m":
+            full_throttle_difference_m,
     
         "peak_line_deviation_m":
             peak_line_deviation_m
     }
+
 
 
 def detect_brake_events(

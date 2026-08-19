@@ -705,6 +705,13 @@ axes = [
 ]
 fig.patch.set_facecolor("black")
 
+# -------------------------
+# Share telemetry X axis
+# -------------------------
+
+for ax in axes[1:]:
+    ax.sharex(ax_speed)
+
 
 graph_axes = {
     "Spd": ax_speed,
@@ -1044,9 +1051,29 @@ for (
         # Racing line
         # -------------------------
 
+        line_deviation = (
+            observation[
+                "peak_line_deviation_m"
+            ]
+        )
+        
+        if line_deviation < 0:
+        
+            line_direction = "left"
+        
+        elif line_deviation > 0:
+        
+            line_direction = "right"
+        
+        else:
+        
+            line_direction = "center"
+        
+        
         print(
             f"  Peak line deviation: "
-            f"{observation['peak_line_deviation_m']:+.2f} m"
+            f"{abs(line_deviation):.2f} m "
+            f"{line_direction}"
         )
 # -------------------------
 # Delta comparison
@@ -1235,30 +1262,7 @@ for section in analysis_sections:
             zorder=0
         )
 
-    for section in analysis_sections:
     
-        middle_pct = (
-            (
-                section["start_position"]
-                + section["end_position"]
-            )
-            / 2
-            * 100
-        )
-    
-        ax_speed.text(
-            middle_pct,
-            0.97,
-            f"S{section['section_number']}",
-            transform=ax_speed.get_xaxis_transform(),
-            color="white",
-            fontsize=8,
-            fontweight="bold",
-            ha="center",
-            va="top"
-        )
-
-
 # -------------------------
 # Racing-line deviation
 # -------------------------
@@ -1468,7 +1472,62 @@ style_legend(
 )
 
 
+section_label_artists = []
 
+
+def update_section_labels():
+
+    global section_label_artists
+
+    # Remove old labels
+    for label in section_label_artists:
+        label.remove()
+
+    section_label_artists = []
+
+
+    # Find top visible telemetry graph
+    visible_axes = [
+        ax
+        for ax in axes
+        if ax.get_visible()
+    ]
+
+    if not visible_axes:
+        return
+
+
+    top_ax = visible_axes[0]
+
+
+    # Add labels to top visible graph
+    for section in analysis_sections:
+
+        middle_pct = (
+            (
+                section["start_position"]
+                + section["end_position"]
+            )
+            / 2
+            * 100
+        )
+
+        label = top_ax.text(
+            middle_pct,
+            0.97,
+            f"S{section['section_number']}",
+            transform=top_ax.get_xaxis_transform(),
+            color="white",
+            fontsize=8,
+            fontweight="bold",
+            ha="center",
+            va="top",
+            zorder=20
+        )
+
+        section_label_artists.append(
+            label
+        )
 
 
 # -------------------------
@@ -1610,6 +1669,7 @@ def reflow_graphs():
         ax_line.set_facecolor("black")
 
     fig.canvas.draw_idle()
+    update_section_labels()
 
 
 # -------------------------
@@ -1704,14 +1764,13 @@ def rebuild_cursor():
     fig.canvas.draw_idle()
 
 def toggle_graph(label):
-
     ax = graph_axes[label]
-
-    ax.set_visible(
-        not ax.get_visible()
-    )
+    ax.set_visible(not ax.get_visible())
 
     reflow_graphs()
+
+    if fig.canvas.toolbar is not None:
+        fig.canvas.toolbar.update()
 
     rebuild_cursor()
 
@@ -1889,6 +1948,66 @@ reflow_graphs()
 # -------------------------
 
 rebuild_cursor()
+
+
+
+def refresh_cursor_after_navigation(event):
+
+    if event.inaxes in axes:
+        rebuild_cursor()
+
+
+fig.canvas.mpl_connect(
+    "button_release_event",
+    refresh_cursor_after_navigation
+)
+
+# -------------------------
+# Pause cursor while navigating
+# -------------------------
+
+navigation_active = False
+
+
+def pause_cursor_during_navigation(event):
+
+    global navigation_active
+
+    toolbar = fig.canvas.toolbar
+
+    if (
+        toolbar is not None
+        and toolbar.mode
+        and cursor is not None
+    ):
+
+        cursor.disconnect()
+        navigation_active = True
+
+
+def resume_cursor_after_navigation(event):
+
+    global navigation_active
+
+    if not navigation_active:
+        return
+
+    navigation_active = False
+
+    rebuild_cursor()
+
+
+
+fig.canvas.mpl_connect(
+    "button_press_event",
+    pause_cursor_during_navigation
+)
+
+fig.canvas.mpl_connect(
+    "button_release_event",
+    resume_cursor_after_navigation
+)
+
 
 
 plt.show()

@@ -22,9 +22,17 @@ from src.analysis.observations import (
     calculate_section_observations
 )
 
+from src.analysis.conclusions import (
+    analyze_section_conclusion
+)
+
 
 
 from matplotlib.widgets import CheckButtons, MultiCursor
+
+
+
+
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 
@@ -891,6 +899,37 @@ for info in valid_lap_info:
 
 
 
+# -------------------------
+# Section conclusions
+# -------------------------
+
+all_conclusions = {}
+
+for (
+    lap_number,
+    observations
+) in all_observations.items():
+
+    lap_conclusions = []
+
+    for observation in observations:
+
+        conclusion = (
+            analyze_section_conclusion(
+                observation
+            )
+        )
+
+        lap_conclusions.append(
+            conclusion
+        )
+
+    all_conclusions[
+        lap_number
+    ] = lap_conclusions
+
+
+
 print()
 print("Section observations:")
 print("=====================")
@@ -1033,7 +1072,7 @@ for (
             )
         
             print(
-                "  Full throttle reached: "
+                "  Final full-throttle commitment: "
                 "no throttle interruption"
             )
         
@@ -1106,6 +1145,50 @@ for (
             f"{abs(line_deviation):.2f} m "
             f"{line_direction}"
         )
+
+print()
+print("Structured conclusions:")
+print("=======================")
+
+for (
+    lap_number,
+    conclusions
+) in all_conclusions.items():
+
+    print()
+    print(
+        f"Lap {lap_number} "
+        f"vs reference "
+        f"Lap {best_lap_number}"
+    )
+
+    for conclusion in conclusions:
+
+        print(
+            conclusion[
+                "headline"
+            ]
+        )
+        
+        for statement in (
+            conclusion[
+                "statements"
+            ]
+        ):
+        
+            print(
+                f"  - {statement}"
+            )
+        
+        print()
+
+
+
+
+
+
+
+
 # -------------------------
 # Delta comparison
 # -------------------------

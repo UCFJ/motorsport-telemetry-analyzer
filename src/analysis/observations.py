@@ -198,6 +198,71 @@ def find_final_throttle_application_onset(
     return None
 
 
+def detect_post_full_throttle_lifts(
+    throttle,
+    start_index,
+    end_index,
+    full_threshold=0.98,
+    lift_threshold=0.90
+):
+
+    first_full_index = None
+
+    for i in range(
+        start_index,
+        end_index + 1
+    ):
+
+        if throttle[i] >= full_threshold:
+
+            first_full_index = i
+            break
+
+
+    if first_full_index is None:
+
+        return 0, None
+
+
+    lift_count = 0
+    minimum_throttle = None
+    in_lift = False
+
+
+    for i in range(
+        first_full_index + 1,
+        end_index + 1
+    ):
+
+        if throttle[i] <= lift_threshold:
+
+            if not in_lift:
+
+                lift_count += 1
+                in_lift = True
+
+
+            if (
+                minimum_throttle is None
+                or
+                throttle[i] < minimum_throttle
+            ):
+
+                minimum_throttle = float(
+                    throttle[i]
+                )
+
+
+        elif throttle[i] >= full_threshold:
+
+            in_lift = False
+
+
+    return (
+        lift_count,
+        minimum_throttle
+    )
+
 
 def calculate_section_observations(
     aligned_lap,
@@ -405,6 +470,8 @@ def calculate_section_observations(
             section_end
         )
     )
+
+    
     
     lap_throttle_applications = (
         detect_throttle_applications(
@@ -413,6 +480,55 @@ def calculate_section_observations(
             section_start,
             section_end
         )
+    )
+
+    # -------------------------
+    # Post-full-throttle lifts
+    # -------------------------
+    
+    if lap_throttle_applications:
+    
+        lap_post_full_throttle_start = (
+            lap_throttle_applications[-1]
+        )
+    
+    else:
+    
+        lap_post_full_throttle_start = (
+            section_start
+        )
+    
+    
+    if reference_throttle_applications:
+    
+        reference_post_full_throttle_start = (
+            reference_throttle_applications[-1]
+        )
+    
+    else:
+    
+        reference_post_full_throttle_start = (
+            section_start
+        )
+    
+    
+    (
+        lap_post_full_throttle_lift_count,
+        lap_post_full_throttle_minimum
+    ) = detect_post_full_throttle_lifts(
+        lap_throttle,
+        lap_post_full_throttle_start,
+        section_end
+    )
+    
+    
+    (
+        reference_post_full_throttle_lift_count,
+        reference_post_full_throttle_minimum
+    ) = detect_post_full_throttle_lifts(
+        reference_throttle,
+        reference_post_full_throttle_start,
+        section_end
     )
     
     
@@ -602,6 +718,18 @@ def calculate_section_observations(
             len(
                 lap_throttle_applications
             ),
+
+        "lap_post_full_throttle_lift_count":
+            lap_post_full_throttle_lift_count,
+        
+        "reference_post_full_throttle_lift_count":
+            reference_post_full_throttle_lift_count,
+        
+        "lap_post_full_throttle_minimum":
+            lap_post_full_throttle_minimum,
+        
+        "reference_post_full_throttle_minimum":
+            reference_post_full_throttle_minimum,
     
         "reference_full_lift":
             reference_full_lift,

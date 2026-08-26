@@ -243,6 +243,18 @@ aligned_laps = align_laps(
     common_position
 )
 
+
+# -------------------------
+# Visualization sampling
+# -------------------------
+
+PLOT_STEP = 4
+
+plot_position = (
+    common_position[::PLOT_STEP]
+    * 100
+)
+
 aligned_laps = (
     calculate_line_deviation(
         aligned_laps,
@@ -796,10 +808,6 @@ for info in valid_lap_info:
     lap_number = info["lap_number"]
     aligned = aligned_laps[lap_number]
 
-    track_position = (
-        aligned["normalized_position"] * 100
-    )
-
     label = (
         f"Lap {lap_number} - "
         f"{format_lap_time(info['lap_time_ms'])}"
@@ -807,8 +815,8 @@ for info in valid_lap_info:
 
     if lap_number == best_lap_number:
         line, = ax_speed.plot(
-            track_position,
-            aligned["speed_kmh"],
+            plot_position,
+            aligned["speed_kmh"][::PLOT_STEP],
             label=label + " - BEST",
             color=lap_colors[lap_number],
             linewidth=2.5
@@ -817,8 +825,8 @@ for info in valid_lap_info:
         lap_lines[lap_number].append(line)
     else:
         line, = ax_speed.plot(
-            track_position,
-            aligned["speed_kmh"],
+            plot_position,
+            aligned["speed_kmh"][::PLOT_STEP],
             label=label,
             linewidth=1.2,
             color=lap_colors[lap_number],
@@ -1206,8 +1214,8 @@ for info in valid_lap_info:
     ) / 1000
 
     line, = ax_delta.plot(
-        common_position * 100,
-        delta_times[lap_number],
+        plot_position,
+        delta_times[lap_number][::PLOT_STEP],
         label=(
             f"Lap {lap_number} "
             f"({official_delta:+.3f}s)"
@@ -1256,8 +1264,8 @@ for info in valid_lap_info:
         linewidth = 1
     
     line, = ax_brake.plot(
-        common_position * 100,
-        aligned["brake"],
+        plot_position,
+        aligned["brake"][::PLOT_STEP],
         color=lap_colors[lap_number],
         linewidth=linewidth
     )
@@ -1289,8 +1297,8 @@ for info in valid_lap_info:
         linewidth = 1
     
     line, = ax_throttle.plot(
-        common_position * 100,
-        aligned["throttle"],
+        plot_position,
+        aligned["throttle"][::PLOT_STEP],
         color=lap_colors[lap_number],
         linewidth=linewidth
     )
@@ -1324,8 +1332,8 @@ for info in valid_lap_info:
         linewidth = 1
 
     line, = ax_steering.plot(
-        common_position * 100,
-        aligned["steering"],
+        plot_position,
+        aligned["steering"][::PLOT_STEP],
         color=lap_colors[lap_number],
         linewidth=linewidth
     )
@@ -1393,8 +1401,8 @@ for info in valid_lap_info:
     ]
 
     line, = ax_deviation.plot(
-        common_position * 100,
-        aligned["line_deviation_m"],
+        plot_position,
+        aligned["line_deviation_m"][::PLOT_STEP],
         color=lap_colors[lap_number],
         linewidth=1.2,
         label=f"L{lap_number}"

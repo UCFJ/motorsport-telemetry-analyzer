@@ -1063,6 +1063,15 @@ for (
             f"{reference_full_lift_text})"
         )
 
+        print(
+            f"  Coasting distance: "
+            f"{observation['coasting_distance_difference_m']:+.1f} m "
+            f"(lap "
+            f"{observation['lap_coasting_distance_m']:.1f} m, "
+            f"ref "
+            f"{observation['reference_coasting_distance_m']:.1f} m)"
+        )
+
 
         if (
             not observation[
@@ -1171,28 +1180,43 @@ for (
     )
 
     for conclusion in conclusions:
-
+    
+        print()
         print(
             conclusion[
                 "headline"
             ]
         )
-        
-        for statement in (
-            conclusion[
-                "statements"
-            ]
-        ):
-        
-            print(
-                f"  - {statement}"
+    
+        print(
+            "-" * len(
+                conclusion[
+                    "headline"
+                ]
             )
-        
-        print()
-
-
-
-
+        )
+    
+    
+        for (
+            group_name,
+            statements
+        ) in conclusion[
+            "groups"
+        ].items():
+    
+            if not statements:
+                continue
+    
+            print()
+            print(
+                group_name.upper()
+            )
+    
+            for statement in statements:
+    
+                print(
+                    f"  • {statement}"
+                )
 
 
 

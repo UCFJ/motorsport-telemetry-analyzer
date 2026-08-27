@@ -1,11 +1,19 @@
+SPEED_DISPLAY_THRESHOLD = 1.0
+POSITION_DISPLAY_THRESHOLD = 1.0
+COASTING_DISPLAY_THRESHOLD = 1.0
+LINE_DISPLAY_THRESHOLD = 0.5
+TIME_DISPLAY_THRESHOLD = 0.020
+
+
 def format_timing_sentence(
     value,
-    earlier_text,
-    later_text,
-    same_text
+    label
 ):
 
     if value is None:
+        return None
+
+    if abs(float(value)) < POSITION_DISPLAY_THRESHOLD:
         return None
 
     difference = round(
@@ -13,18 +21,14 @@ def format_timing_sentence(
         1
     )
 
-    if difference == 0.0:
-        return same_text
-
     if value < 0:
-        return (
-            f"{earlier_text} "
-            f"{difference:.1f} m earlier."
-        )
+        direction = "earlier"
+    else:
+        direction = "later"
 
     return (
-        f"{later_text} "
-        f"{difference:.1f} m later."
+        f"{label}: "
+        f"{difference:.1f} m {direction}."
     )
 
 
@@ -33,26 +37,22 @@ def format_speed_sentence(
     label
 ):
 
+    if abs(float(value)) < SPEED_DISPLAY_THRESHOLD:
+        return None
+
     difference = round(
         abs(float(value)),
         1
     )
 
-    if difference == 0.0:
-        return (
-            f"{label} was the same "
-            f"as the reference."
-        )
-
     if value > 0:
-        return (
-            f"{label} was "
-            f"{difference:.1f} km/h higher."
-        )
+        direction = "higher"
+    else:
+        direction = "lower"
 
     return (
-        f"{label} was "
-        f"{difference:.1f} km/h lower."
+        f"{label}: "
+        f"{difference:.1f} km/h {direction}."
     )
 
 
@@ -62,35 +62,12 @@ def format_application_count(
     input_name
 ):
 
-    if (
-        lap_count == 0
-        and reference_count == 0
-    ):
-
-        return (
-            f"Neither lap had a "
-            f"{input_name} application."
-        )
-
     if lap_count == reference_count:
-
-        if lap_count == 1:
-            return (
-                f"Both laps had 1 "
-                f"{input_name} application."
-            )
-
-        return (
-            f"Both laps had "
-            f"{lap_count} "
-            f"{input_name} applications."
-        )
+        return None
 
     return (
-        f"You had {lap_count} "
-        f"{input_name} applications "
-        f"vs {reference_count} "
-        f"on the reference."
+        f"{input_name} applications: "
+        f"{lap_count} vs {reference_count} reference."
     )
 
 
@@ -134,21 +111,40 @@ def format_full_lift(
     )
 
 
+def format_coasting_distance(
+    value
+):
+
+    if abs(float(value)) < COASTING_DISPLAY_THRESHOLD:
+        return None
+
+    difference = round(
+        abs(float(value)),
+        1
+    )
+
+    if value > 0:
+        direction = "more"
+    else:
+        direction = "less"
+
+    return (
+        f"Coasting: "
+        f"{difference:.1f} m {direction}."
+    )
+
+
 def format_racing_line(
     value
 ):
+
+    if abs(float(value)) < LINE_DISPLAY_THRESHOLD:
+        return None
 
     deviation = round(
         abs(float(value)),
         1
     )
-
-    if deviation == 0.0:
-
-        return (
-            "Peak racing-line deviation "
-            "was 0.0 m."
-        )
 
     if value < 0:
         direction = "left"
@@ -156,9 +152,8 @@ def format_racing_line(
         direction = "right"
 
     return (
-        f"Peak racing-line deviation "
-        f"was {deviation:.1f} m "
-        f"{direction} of the reference."
+        f"Peak line deviation: "
+        f"{deviation:.1f} m {direction}."
     )
 
 
@@ -180,10 +175,17 @@ def analyze_section_conclusion(
 
 
     # -------------------------
-    # Section time
+    # Headline
     # -------------------------
 
-    if section_delta > 0:
+    if abs(section_delta) < TIME_DISPLAY_THRESHOLD:
+
+        headline = (
+            f"Section {section_number} — "
+            f"No time difference"
+        )
+
+    elif section_delta > 0:
 
         headline = (
             f"Section {section_number} — "
@@ -205,14 +207,21 @@ def analyze_section_conclusion(
         )
 
 
-    statements = []
+    # -------------------------
+    # Output groups
+    # -------------------------
+
+    speed = []
+    braking = []
+    throttle = []
+    racing_line = []
 
 
     # -------------------------
     # Speed
     # -------------------------
 
-    statements.append(
+    minimum_speed_sentence = (
         format_speed_sentence(
             observation[
                 "min_speed_difference_kmh"
@@ -221,7 +230,14 @@ def analyze_section_conclusion(
         )
     )
 
-    statements.append(
+    if minimum_speed_sentence is not None:
+
+        speed.append(
+            minimum_speed_sentence
+        )
+
+
+    section_end_speed_sentence = (
         format_speed_sentence(
             observation[
                 "section_end_speed_difference_kmh"
@@ -230,12 +246,18 @@ def analyze_section_conclusion(
         )
     )
 
+    if section_end_speed_sentence is not None:
+
+        speed.append(
+            section_end_speed_sentence
+        )
+
 
     # -------------------------
     # Braking
     # -------------------------
 
-    statements.append(
+    brake_count_sentence = (
         format_application_count(
             observation[
                 "lap_brake_application_count"
@@ -243,9 +265,15 @@ def analyze_section_conclusion(
             observation[
                 "reference_brake_application_count"
             ],
-            "brake"
+            "Brake"
         )
     )
+
+    if brake_count_sentence is not None:
+
+        braking.append(
+            brake_count_sentence
+        )
 
 
     brake_onset_sentence = (
@@ -253,17 +281,13 @@ def analyze_section_conclusion(
             observation[
                 "brake_onset_difference_m"
             ],
-            "You braked",
-            "You braked",
-            (
-                "You braked at the same "
-                "point as the reference."
-            )
+            "Brake onset"
         )
     )
 
     if brake_onset_sentence is not None:
-        statements.append(
+
+        braking.append(
             brake_onset_sentence
         )
 
@@ -273,18 +297,13 @@ def analyze_section_conclusion(
             observation[
                 "brake_release_difference_m"
             ],
-            "You released the brakes",
-            "You released the brakes",
-            (
-                "You released the brakes "
-                "at the same point as "
-                "the reference."
-            )
+            "Brake release"
         )
     )
 
     if brake_release_sentence is not None:
-        statements.append(
+
+        braking.append(
             brake_release_sentence
         )
 
@@ -293,7 +312,7 @@ def analyze_section_conclusion(
     # Throttle
     # -------------------------
 
-    statements.append(
+    throttle_count_sentence = (
         format_application_count(
             observation[
                 "lap_throttle_application_count"
@@ -301,21 +320,30 @@ def analyze_section_conclusion(
             observation[
                 "reference_throttle_application_count"
             ],
-            "throttle"
+            "Throttle"
         )
     )
 
+    if throttle_count_sentence is not None:
 
-    statements.append(
-        format_full_lift(
+        throttle.append(
+            throttle_count_sentence
+        )
+
+
+    coasting_sentence = (
+        format_coasting_distance(
             observation[
-                "lap_full_lift"
-            ],
-            observation[
-                "reference_full_lift"
+                "coasting_distance_difference_m"
             ]
         )
     )
+
+    if coasting_sentence is not None:
+
+        throttle.append(
+            coasting_sentence
+        )
 
 
     lap_throttle_interrupted = (
@@ -332,156 +360,137 @@ def analyze_section_conclusion(
 
 
     if (
-        not lap_throttle_interrupted
-        and
-        not reference_throttle_interrupted
+        lap_throttle_interrupted
+        or
+        reference_throttle_interrupted
     ):
-
-        statements.append(
-            "Neither lap had a "
-            "throttle interruption."
-        )
-
-    else:
 
         throttle_onset_sentence = (
             format_timing_sentence(
                 observation[
                     "final_throttle_onset_difference_m"
                 ],
-                (
-                    "Your final throttle "
-                    "application began"
-                ),
-                (
-                    "Your final throttle "
-                    "application began"
-                ),
-                (
-                    "Your final throttle "
-                    "application began at "
-                    "the same point as "
-                    "the reference."
-                )
+                "Final throttle application"
             )
         )
 
-        if (
-            throttle_onset_sentence
-            is not None
-        ):
+        if throttle_onset_sentence is not None:
 
-            statements.append(
+            throttle.append(
                 throttle_onset_sentence
             )
 
-        
 
-        lap_post_lift_count = (
-            observation[
-                "lap_post_full_throttle_lift_count"
-            ]
-        )
-        
-        reference_post_lift_count = (
-            observation[
-                "reference_post_full_throttle_lift_count"
-            ]
-        )
-        
-        
-        if (
-            lap_post_lift_count
-            > reference_post_lift_count
-        ):
-        
-            additional_lifts = (
-                lap_post_lift_count
-                - reference_post_lift_count
-            )
-        
-            minimum_throttle = (
-                observation[
-                    "lap_post_full_throttle_minimum"
-                ]
-            )
-        
-        
-            if additional_lifts == 1:
-        
-                sentence = (
-                    "You had 1 additional "
-                    "throttle lift after first "
-                    "reaching full throttle"
-                )
-        
-            else:
-        
-                sentence = (
-                    f"You had {additional_lifts} "
-                    f"additional throttle lifts "
-                    f"after first reaching "
-                    f"full throttle"
-                )
-        
-        
-            if minimum_throttle is not None:
-        
-                sentence += (
-                    f", dropping to "
-                    f"{minimum_throttle * 100:.0f}%."
-                )
-        
-            else:
-        
-                sentence += "."
-        
-        
-            statements.append(
-                sentence
-            )
         full_throttle_sentence = (
             format_timing_sentence(
                 observation[
                     "full_throttle_difference_m"
                 ],
-                (
-                    "Your final full-throttle "
-                    "commitment occurred"
-                ),
-                (
-                    "Your final full-throttle "
-                    "commitment occurred"
-                ),
-                (
-                    "Your final full-throttle "
-                    "commitment occurred at "
-                    "the same point as "
-                    "the reference."
-                )
+                "Full throttle reached"
             )
         )
 
-        if (
-            full_throttle_sentence
-            is not None
-        ):
+        if full_throttle_sentence is not None:
 
-            statements.append(
+            throttle.append(
                 full_throttle_sentence
             )
+
+
+    # -------------------------
+    # Extra lifts after reaching
+    # full throttle
+    # -------------------------
+
+    additional_lifts = (
+        observation[
+            "post_full_throttle_lift_count_difference"
+        ]
+    )
+
+    if additional_lifts > 0:
+
+        minimum_throttle = (
+            observation[
+                "lap_post_full_throttle_minimum"
+            ]
+        )
+
+        if additional_lifts == 1:
+
+            sentence = (
+                "You had 1 additional "
+                "throttle lift after first "
+                "reaching full throttle"
+            )
+
+        else:
+
+            sentence = (
+                f"You had {additional_lifts} "
+                f"additional throttle lifts "
+                f"after first reaching "
+                f"full throttle"
+            )
+
+        if minimum_throttle is not None:
+
+            sentence += (
+                f", dropping to "
+                f"{minimum_throttle * 100:.0f}%."
+            )
+
+        else:
+
+            sentence += "."
+
+        throttle.append(
+            sentence
+        )
 
 
     # -------------------------
     # Racing line
     # -------------------------
 
-    statements.append(
+    racing_line_sentence = (
         format_racing_line(
             observation[
                 "peak_line_deviation_m"
             ]
         )
+    )
+
+    if racing_line_sentence is not None:
+
+        racing_line.append(
+            racing_line_sentence
+        )
+
+
+    # -------------------------
+    # Structured wording layer
+    # -------------------------
+
+    groups = {
+        group_name: group_statements
+        for group_name, group_statements in (
+            ("Speed", speed),
+            ("Braking", braking),
+            ("Throttle", throttle),
+            ("Racing line", racing_line)
+        )
+        if group_statements
+    }
+
+
+    # Keep flat statements as well
+    # so existing code does not break.
+    statements = (
+        speed
+        + braking
+        + throttle
+        + racing_line
     )
 
 
@@ -491,6 +500,9 @@ def analyze_section_conclusion(
 
         "headline":
             headline,
+
+        "groups":
+            groups,
 
         "statements":
             statements

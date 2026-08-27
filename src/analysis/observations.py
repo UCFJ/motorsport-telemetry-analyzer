@@ -264,6 +264,58 @@ def detect_post_full_throttle_lifts(
     )
 
 
+def calculate_coasting_distance(
+    throttle,
+    brake,
+    distance,
+    start_index,
+    end_index,
+    threshold=0.10
+):
+
+    section_throttle = throttle[
+        start_index:
+        end_index + 1
+    ]
+
+    section_brake = brake[
+        start_index:
+        end_index + 1
+    ]
+
+    section_distance = distance[
+        start_index:
+        end_index + 1
+    ]
+
+    if len(section_distance) < 2:
+        return 0.0
+
+    coasting = (
+        (section_throttle <= threshold)
+        &
+        (section_brake <= threshold)
+    )
+
+    distance_steps = np.diff(
+        section_distance
+    )
+
+    coasting_intervals = (
+        coasting[:-1]
+        &
+        coasting[1:]
+    )
+
+    return float(
+        np.sum(
+            distance_steps[
+                coasting_intervals
+            ]
+        )
+    )
+
+
 def calculate_section_observations(
     aligned_lap,
     reference_lap,
@@ -471,6 +523,37 @@ def calculate_section_observations(
         )
     )
 
+
+    # -------------------------
+    # Coasting
+    # -------------------------
+    
+    reference_coasting_distance = (
+        calculate_coasting_distance(
+            reference_lap["throttle"],
+            reference_lap["brake"],
+            distance,
+            section_start,
+            section_end
+        )
+    )
+    
+    lap_coasting_distance = (
+        calculate_coasting_distance(
+            aligned_lap["throttle"],
+            aligned_lap["brake"],
+            distance,
+            section_start,
+            section_end
+        )
+    )
+    
+    coasting_distance_difference_m = (
+        lap_coasting_distance
+        -
+        reference_coasting_distance
+    )
+
     
     
     lap_throttle_applications = (
@@ -529,6 +612,11 @@ def calculate_section_observations(
         reference_throttle,
         reference_post_full_throttle_start,
         section_end
+    )
+
+    post_full_throttle_lift_count_difference = (
+        lap_post_full_throttle_lift_count
+        - reference_post_full_throttle_lift_count
     )
     
     
@@ -724,6 +812,9 @@ def calculate_section_observations(
         
         "reference_post_full_throttle_lift_count":
             reference_post_full_throttle_lift_count,
+
+        "post_full_throttle_lift_count_difference":
+            post_full_throttle_lift_count_difference,
         
         "lap_post_full_throttle_minimum":
             lap_post_full_throttle_minimum,
@@ -736,6 +827,15 @@ def calculate_section_observations(
     
         "lap_full_lift":
             lap_full_lift,
+
+        "reference_coasting_distance_m":
+            reference_coasting_distance,
+        
+        "lap_coasting_distance_m":
+            lap_coasting_distance,
+        
+        "coasting_distance_difference_m":
+            coasting_distance_difference_m,
     
         "reference_throttle_interrupted":
             reference_throttle_interrupted,

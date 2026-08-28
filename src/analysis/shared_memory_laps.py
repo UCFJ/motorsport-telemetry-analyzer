@@ -2,6 +2,7 @@ from pathlib import Path
 
 import matplotlib.pyplot as plt
 import numpy as np
+from matplotlib.colors import to_hex
 
 from src.ingestion.shared_memory_loader import load_shared_memory_csv
 from src.analysis.lap_alignment import (
@@ -28,7 +29,7 @@ from src.analysis.conclusions import (
 
 
 
-from matplotlib.widgets import CheckButtons, MultiCursor
+from matplotlib.widgets import MultiCursor
 
 
 
@@ -842,12 +843,6 @@ apply_dark_style(
     ax_speed
 )
 
-speed_legend = ax_speed.legend()
-style_legend(speed_legend)
-
-
-
-
 # -------------------------
 # Calculate time delta
 # -------------------------
@@ -1269,8 +1264,7 @@ apply_dark_style(
     ax_delta
 )
 
-delta_legend = ax_delta.legend()
-style_legend(delta_legend)
+ax_delta.set_visible(False)
 
 
 # -------------------------
@@ -1381,6 +1375,8 @@ apply_dark_style(
     ax_steering
 )
 
+ax_steering.set_visible(False)
+
 
 # -------------------------
 # Analysis section markers
@@ -1457,15 +1453,6 @@ apply_dark_style(
     fig,
     ax_deviation
 )
-
-deviation_legend = (
-    ax_deviation.legend()
-)
-
-style_legend(
-    deviation_legend
-)
-
 
 # Start hidden
 ax_deviation.set_visible(False)
@@ -1603,19 +1590,13 @@ for section in analysis_sections:
             "alpha": 0.8
         },
 
-        annotation_clip=False,
+        annotation_clip=True,
+        clip_on=True,
         zorder=10
     )
 
     
 
-
-
-line_legend = ax_line.legend()
-
-style_legend(
-    line_legend
-)
 
 
 section_label_artists = []
@@ -1668,6 +1649,7 @@ def update_section_labels():
             fontweight="bold",
             ha="center",
             va="top",
+            clip_on=True,
             zorder=20
         )
 
@@ -1679,6 +1661,70 @@ def update_section_labels():
 # -------------------------
 # Dynamic graph layout
 # -------------------------
+
+TELEMETRY_GAP_MIN = 0.035
+TELEMETRY_GAP_MAX = 0.050
+TELEMETRY_LABEL_PADDING_PX = 5.0
+
+
+def calculate_telemetry_gap(visible_axes):
+    gap = 0.035
+
+    if len(visible_axes) < 2:
+        return gap
+
+    try:
+        renderer = fig.canvas.get_renderer()
+        canvas_height_px = float(renderer.height)
+
+        if not np.isfinite(canvas_height_px) or canvas_height_px <= 0:
+            return gap
+
+        required_gap_px = TELEMETRY_LABEL_PADDING_PX
+
+        for upper_ax, lower_ax in zip(visible_axes, visible_axes[1:]):
+            upper_axis_bounds = upper_ax.get_window_extent(renderer)
+            lower_axis_bounds = lower_ax.get_window_extent(renderer)
+            upper_label_bounds = upper_ax.yaxis.label.get_window_extent(renderer)
+            lower_label_bounds = lower_ax.yaxis.label.get_window_extent(renderer)
+
+            bounds = (
+                upper_axis_bounds.y0,
+                lower_axis_bounds.y1,
+                upper_label_bounds.y0,
+                lower_label_bounds.y1,
+            )
+
+            if not np.all(np.isfinite(bounds)):
+                return gap
+
+            upper_bottom_overhang = max(
+                0.0,
+                upper_axis_bounds.y0 - upper_label_bounds.y0,
+            )
+            lower_top_overhang = max(
+                0.0,
+                lower_label_bounds.y1 - lower_axis_bounds.y1,
+            )
+
+            required_gap_px = max(
+                required_gap_px,
+                upper_bottom_overhang
+                + lower_top_overhang
+                + TELEMETRY_LABEL_PADDING_PX,
+            )
+
+        measured_gap = required_gap_px / canvas_height_px
+        return float(
+            np.clip(
+                measured_gap,
+                TELEMETRY_GAP_MIN,
+                TELEMETRY_GAP_MAX,
+            )
+        )
+    except (AttributeError, RuntimeError, TypeError, ValueError):
+        return gap
+
 
 def reflow_graphs():
 
@@ -1701,7 +1747,7 @@ def reflow_graphs():
     # -------------------------
 
     left = 0.07
-    right = 0.86
+    right = 0.97
 
     bottom = 0.08
     top = 0.96
@@ -1742,7 +1788,9 @@ def reflow_graphs():
 
     if visible_telemetry:
 
-        gap = 0.025
+        gap = calculate_telemetry_gap(
+            [ax for name, ax in visible_telemetry]
+        )
 
         total_weight = sum(
             graph_weights[name]
@@ -1818,52 +1866,6 @@ def reflow_graphs():
     update_section_labels()
 
 
-# -------------------------
-# Graph selector
-# -------------------------
-
-selector_ax = fig.add_axes(
-    [0.88, 0.82, 0.09, 0.12]
-)
-
-selector_ax.set_facecolor("black")
-
-selector_ax.tick_params(
-    left=False,
-    bottom=False,
-    labelleft=False,
-    labelbottom=False
-)
-
-for spine in selector_ax.spines.values():
-    spine.set_visible(False)
-
-graph_selector = CheckButtons(
-    selector_ax,
-    labels=list(graph_axes.keys()),
-    actives=[True, True, True, True, True, False, False],
-
-    label_props={
-        "color": ["white"],
-        "fontsize": [8]
-    },
-
-    frame_props={
-        "edgecolor": ["white"],
-        "facecolor": ["black"],
-        "linewidth": [1]
-    },
-
-    check_props={
-        "color": ["lime"],
-        "linewidth": [2]
-    }
-)
-
-for label in graph_selector.labels:
-    label.set_color("white")
-    label.set_fontsize(8)
-
 cursor = None
 
 
@@ -1909,9 +1911,9 @@ def rebuild_cursor():
 
     fig.canvas.draw_idle()
 
-def toggle_graph(label):
+def set_graph_visibility(label, visible):
     ax = graph_axes[label]
-    ax.set_visible(not ax.get_visible())
+    ax.set_visible(visible)
 
     reflow_graphs()
 
@@ -1921,172 +1923,28 @@ def toggle_graph(label):
     rebuild_cursor()
 
 
-graph_selector.on_clicked(
-    toggle_graph
-)
-
-
-# -------------------------
-# Lap selector
-# -------------------------
-
-lap_labels = [
-    f"L{info['lap_number']}"
-    for info in valid_lap_info
-]
-
-lap_label_to_number = {
-    f"L{info['lap_number']}": info["lap_number"]
-    for info in valid_lap_info
-}
-
-lap_selector_height = (
-    0.032 * len(lap_labels) + 0.02
-)
-
-lap_selector_ax = fig.add_axes(
-    [
-        0.88,
-        0.78 - lap_selector_height,
-        0.09,
-        lap_selector_height
-    ]
-)
-
-lap_selector_ax.set_facecolor("black")
-
-lap_selector_ax.tick_params(
-    left=False,
-    bottom=False,
-    labelleft=False,
-    labelbottom=False
-)
-
-for spine in lap_selector_ax.spines.values():
-    spine.set_visible(False)
-
-lap_selector = CheckButtons(
-    lap_selector_ax,
-    labels=lap_labels,
-    actives=[True] * len(lap_labels),
-
-    label_props={
-        "color": ["white"],
-        "fontsize": [8]
-    },
-
-    frame_props={
-        "edgecolor": ["white"],
-        "facecolor": ["black"],
-        "linewidth": [1]
-    },
-
-    check_props={
-        "color": ["lime"],
-        "linewidth": [2]
-    }
-)
-
-
-def update_lap_legends():
-
-    # Speed legend
-    speed_handles = [
-        line
-        for line in ax_speed.get_lines()
-        if (
-            line.get_visible()
-            and not line.get_label().startswith("_")
-        )
-    ]
-
-    if speed_handles:
-        speed_legend = ax_speed.legend(
-            handles=speed_handles
-        )
-
-        style_legend(speed_legend)
-
-    # Delta legend
-    delta_handles = [
-        line
-        for line in ax_delta.get_lines()
-        if (
-            line.get_visible()
-            and not line.get_label().startswith("_")
-        )
-    ]
-
-    if delta_handles:
-        delta_legend = ax_delta.legend(
-            handles=delta_handles
-        )
-
-        style_legend(delta_legend)
-
-    # Racing-line legend
-    line_handles = [
-        line
-        for line in ax_line.get_lines()
-        if (
-            line.get_visible()
-            and not line.get_label().startswith("_")
-        )
-    ]
-    
-    if line_handles:
-        line_legend = ax_line.legend(
-            handles=line_handles
-        )
-    
-        style_legend(line_legend)
-
-    # Deviation legend
-    deviation_handles = [
-        line
-        for line in ax_deviation.get_lines()
-        if (
-            line.get_visible()
-            and not line.get_label().startswith("_")
-        )
-    ]
-    
-    if deviation_handles:
-    
-        deviation_legend = (
-            ax_deviation.legend(
-                handles=deviation_handles
-            )
-        )
-    
-        style_legend(
-            deviation_legend
-        )
-
-
-def toggle_lap(label):
-
-    lap_number = lap_label_to_number[label]
-
+def set_lap_visibility(lap_number, visible):
     lines = lap_lines[lap_number]
-
-    new_visibility = not lines[0].get_visible()
 
     for line in lines:
         line.set_visible(
-            new_visibility
+            visible
         )
-
-    update_lap_legends()
 
     fig.canvas.draw_idle()
 
 
-lap_selector.on_clicked(
-    toggle_lap
-)
-
 reflow_graphs()
+
+
+def reflow_graphs_after_resize(_event):
+    reflow_graphs()
+
+
+fig.canvas.mpl_connect(
+    "resize_event",
+    reflow_graphs_after_resize
+)
 
 
 # -------------------------
@@ -2156,4 +2014,23 @@ fig.canvas.mpl_connect(
 
 
 
-plt.show()
+def create_telemetry_figure():
+    """Return the initialized telemetry viewer figure."""
+    return fig
+
+
+def get_telemetry_lap_legend_entries():
+    """Return lap labels, display colors, and reference status for the Qt UI."""
+    return [
+        (
+            info["lap_number"],
+            f"Lap {info['lap_number']}",
+            to_hex(lap_colors[info["lap_number"]]),
+            info["lap_number"] == best_lap_number,
+        )
+        for info in valid_lap_info
+    ]
+
+
+if __name__ == "__main__":
+    plt.show()

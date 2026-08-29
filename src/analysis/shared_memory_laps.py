@@ -1,3 +1,4 @@
+from datetime import datetime
 from pathlib import Path
 
 import matplotlib.pyplot as plt
@@ -11,6 +12,7 @@ from src.analysis.lap_alignment import (
     calculate_line_deviation
 )
 from src.analysis.section_detection import (
+    calculate_reference_geometry,
     detect_corner_sections,
     analyze_section_gaps,
     detect_braking_zones,
@@ -256,27 +258,12 @@ plot_position = (
     * 100
 )
 
-aligned_laps = (
-    calculate_line_deviation(
-        aligned_laps,
-        best_lap_number
-    )
-)
-
 # -------------------------
-# Racing-line deviation
+# Section-detection reference
 # -------------------------
 
 reference_line = aligned_laps[
     best_lap_number
-]
-
-reference_x = reference_line[
-    "world_x"
-]
-
-reference_z = reference_line[
-    "world_z"
 ]
 
 # -------------------------
@@ -594,68 +581,6 @@ for section in analysis_sections:
         f"| found "
         f"{section['exit_recovery_found']}"
     )
-# Direction of reference trajectory
-reference_dx = np.gradient(
-    reference_x
-)
-
-reference_dz = np.gradient(
-    reference_z
-)
-
-direction_length = np.hypot(
-    reference_dx,
-    reference_dz
-)
-
-direction_length[
-    direction_length < 1e-9
-] = 1.0
-
-
-# Perpendicular direction
-normal_x = (
-    -reference_dz
-    / direction_length
-)
-
-normal_z = (
-    reference_dx
-    / direction_length
-)
-
-
-for lap_number, aligned in aligned_laps.items():
-
-    difference_x = (
-        aligned["world_x"]
-        - reference_x
-    )
-
-    difference_z = (
-        aligned["world_z"]
-        - reference_z
-    )
-
-    signed_deviation = (
-        difference_x * normal_x
-        + difference_z * normal_z
-    )
-
-    absolute_deviation = np.hypot(
-        difference_x,
-        difference_z
-    )
-
-    aligned["line_deviation_m"] = (
-        signed_deviation
-    )
-
-    aligned["line_distance_m"] = (
-        absolute_deviation
-    )
-
-
 # -------------------------
 # Telemetry comparison window
 # -------------------------
@@ -770,6 +695,7 @@ color_cycle = [
 ]
 
 lap_colors = {}
+lap_base_colors = {}
 
 color_index = 0
 
@@ -778,15 +704,21 @@ for info in valid_lap_info:
     lap_number = info["lap_number"]
 
     if lap_number == best_lap_number:
-        lap_colors[lap_number] = "lime"
+        continue
     else:
-        lap_colors[lap_number] = (
+        lap_base_colors[lap_number] = (
             color_cycle[
                 color_index % len(color_cycle)
             ]
         )
+        lap_colors[lap_number] = lap_base_colors[lap_number]
 
         color_index += 1
+
+lap_base_colors[best_lap_number] = (
+    color_cycle[color_index % len(color_cycle)]
+)
+lap_colors = lap_base_colors.copy()
 
 
 
@@ -798,6 +730,7 @@ lap_lines = {
     info["lap_number"]: []
     for info in valid_lap_info
 }
+speed_lines = {}
 
 
 # -------------------------
@@ -820,10 +753,11 @@ for info in valid_lap_info:
             aligned["speed_kmh"][::PLOT_STEP],
             label=label + " - BEST",
             color=lap_colors[lap_number],
-            linewidth=2.5
+            linewidth=1.2
         )
         
         lap_lines[lap_number].append(line)
+        speed_lines[lap_number] = line
     else:
         line, = ax_speed.plot(
             plot_position,
@@ -834,6 +768,7 @@ for info in valid_lap_info:
         )
         
         lap_lines[lap_number].append(line)
+        speed_lines[lap_number] = line
 
 ax_speed.set_ylabel("Speed (km/h)")
 ax_speed.set_title("Speed Comparison")
@@ -844,92 +779,99 @@ apply_dark_style(
 )
 
 # -------------------------
-# Calculate time delta
+# Lazy ordered-pair analysis
 # -------------------------
 
-delta_times = calculate_deltas(
-    aligned_laps,
-    best_lap_number
-)
+def get_or_calculate_pair_analysis(
+    analysis_cache,
+    reference_lap_number,
+    comparison_lap_number
+):
+    reference_lap_number = int(reference_lap_number)
+    comparison_lap_number = int(comparison_lap_number)
+    cache_key = (
+        reference_lap_number,
+        comparison_lap_number
+    )
 
-
-
-# -------------------------
-# Section observations
-# -------------------------
-
-all_observations = {}
-
-for info in valid_lap_info:
-
-    lap_number = info[
-        "lap_number"
-    ]
+    if cache_key in analysis_cache:
+        print(
+            f"CACHE HIT: Lap {comparison_lap_number} "
+            f"vs Lap {reference_lap_number}"
+        )
+        return analysis_cache[cache_key]
 
     if (
-        lap_number
-        == best_lap_number
+        reference_lap_number not in aligned_laps
+        or comparison_lap_number not in aligned_laps
+        or reference_lap_number == comparison_lap_number
     ):
-        continue
+        raise ValueError("Reference and comparison must be different valid laps.")
 
-    aligned = aligned_laps[
-        lap_number
+    print(
+        f"CACHE MISS: Lap {comparison_lap_number} "
+        f"vs Lap {reference_lap_number}"
+    )
+
+    pair_laps = {
+        reference_lap_number: aligned_laps[reference_lap_number].copy(),
+        comparison_lap_number: aligned_laps[comparison_lap_number].copy(),
+    }
+    pair_deltas = calculate_deltas(
+        pair_laps,
+        reference_lap_number
+    )
+    pair_laps = calculate_line_deviation(
+        pair_laps,
+        reference_lap_number
+    )
+    pair_reference = pair_laps[reference_lap_number]
+    pair_comparison = pair_laps[comparison_lap_number]
+    pair_reference_geometry = calculate_reference_geometry(
+        pair_reference
+    )
+    reference_info = next(
+        info
+        for info in valid_lap_info
+        if info["lap_number"] == reference_lap_number
+    )
+    comparison_info = next(
+        info
+        for info in valid_lap_info
+        if info["lap_number"] == comparison_lap_number
+    )
+    overall_lap_time_difference_s = (
+        comparison_info["lap_time_ms"]
+        - reference_info["lap_time_ms"]
+    ) / 1000
+    observations = [
+        calculate_section_observations(
+            pair_comparison,
+            pair_reference,
+            section,
+            pair_reference_geometry,
+            pair_deltas[comparison_lap_number]
+        )
+        for section in analysis_sections
+    ]
+    conclusions = [
+        analyze_section_conclusion(observation)
+        for observation in observations
     ]
 
-    lap_observations = []
-
-    for section in analysis_sections:
-
-        observation = (
-            calculate_section_observations(
-                aligned,
-                reference_line,
-                section,
-                reference_geometry,
-                delta_times[
-                    lap_number
-                ]
-            )
-        )
-
-        lap_observations.append(
-            observation
-        )
-
-    all_observations[
-        lap_number
-    ] = lap_observations
+    pair_result = {
+        "overall_lap_time_difference_s": overall_lap_time_difference_s,
+        "delta": pair_deltas[comparison_lap_number],
+        "line_deviation": pair_comparison["line_deviation_m"],
+        "observations": observations,
+        "conclusions": conclusions,
+    }
+    analysis_cache[cache_key] = pair_result
+    return pair_result
 
 
-
-# -------------------------
-# Section conclusions
-# -------------------------
-
+all_observations = {}
 all_conclusions = {}
-
-for (
-    lap_number,
-    observations
-) in all_observations.items():
-
-    lap_conclusions = []
-
-    for observation in observations:
-
-        conclusion = (
-            analyze_section_conclusion(
-                observation
-            )
-        )
-
-        lap_conclusions.append(
-            conclusion
-        )
-
-    all_conclusions[
-        lap_number
-    ] = lap_conclusions
 
 
 
@@ -1220,30 +1162,24 @@ for (
 # Delta comparison
 # -------------------------
 
+delta_lines = {}
+
 for info in valid_lap_info:
 
     lap_number = info["lap_number"]
 
-    if lap_number == best_lap_number:
-        continue
-
-    official_delta = (
-        info["lap_time_ms"]
-        - best_lap_info["lap_time_ms"]
-    ) / 1000
-
     line, = ax_delta.plot(
         plot_position,
-        delta_times[lap_number][::PLOT_STEP],
-        label=(
-            f"Lap {lap_number} "
-            f"({official_delta:+.3f}s)"
-        ),
+        np.zeros_like(plot_position),
+        label="_nolegend_",
         color=lap_colors[lap_number],
         linewidth=1.5
     )
+    line.set_visible(False)
+    line._pair_active = False
     
     lap_lines[lap_number].append(line)
+    delta_lines[lap_number] = line
 
 ax_delta.axhline(
     0,
@@ -1253,10 +1189,10 @@ ax_delta.axhline(
 )
 
 ax_delta.set_ylabel("Delta (s)")
+ax_delta.set_ylim(-1.0, 1.0)
 
 ax_delta.set_title(
-    f"Delta vs Lap {best_lap_number} - "
-    f"{format_lap_time(best_lap_info['lap_time_ms'])}"
+    "Delta"
 )
 
 apply_dark_style(
@@ -1276,16 +1212,11 @@ for info in valid_lap_info:
     lap_number = info["lap_number"]
     aligned = aligned_laps[lap_number]
 
-    if lap_number == best_lap_number:
-        linewidth = 2
-    else:
-        linewidth = 1
-    
     line, = ax_brake.plot(
         plot_position,
         aligned["brake"][::PLOT_STEP],
         color=lap_colors[lap_number],
-        linewidth=linewidth
+        linewidth=1
     )
     
     lap_lines[lap_number].append(line)
@@ -1309,16 +1240,11 @@ for info in valid_lap_info:
     lap_number = info["lap_number"]
     aligned = aligned_laps[lap_number]
 
-    if lap_number == best_lap_number:
-        linewidth = 2
-    else:
-        linewidth = 1
-    
     line, = ax_throttle.plot(
         plot_position,
         aligned["throttle"][::PLOT_STEP],
         color=lap_colors[lap_number],
-        linewidth=linewidth
+        linewidth=1
     )
     
     lap_lines[lap_number].append(line)
@@ -1344,16 +1270,11 @@ for info in valid_lap_info:
     lap_number = info["lap_number"]
     aligned = aligned_laps[lap_number]
 
-    if lap_number == best_lap_number:
-        linewidth = 2
-    else:
-        linewidth = 1
-
     line, = ax_steering.plot(
         plot_position,
         aligned["steering"][::PLOT_STEP],
         color=lap_colors[lap_number],
-        linewidth=linewidth
+        linewidth=1
     )
 
     lap_lines[lap_number].append(line)
@@ -1409,12 +1330,11 @@ for section in analysis_sections:
 # Racing-line deviation
 # -------------------------
 
+deviation_lines = {}
+
 for info in valid_lap_info:
 
     lap_number = info["lap_number"]
-
-    if lap_number == best_lap_number:
-        continue
 
     aligned = aligned_laps[
         lap_number
@@ -1422,15 +1342,18 @@ for info in valid_lap_info:
 
     line, = ax_deviation.plot(
         plot_position,
-        aligned["line_deviation_m"][::PLOT_STEP],
+        np.zeros_like(plot_position),
         color=lap_colors[lap_number],
         linewidth=1.2,
         label=f"L{lap_number}"
     )
+    line.set_visible(False)
+    line._pair_active = False
 
     lap_lines[
         lap_number
     ].append(line)
+    deviation_lines[lap_number] = line
 
 
 ax_deviation.axhline(
@@ -1929,6 +1852,17 @@ def set_lap_visibility(lap_number, visible):
     for line in lines:
         line.set_visible(
             visible
+            and (
+                line.axes not in (
+                    ax_delta,
+                    ax_deviation
+                )
+                or getattr(
+                    line,
+                    "_pair_active",
+                    False
+                )
+            )
         )
 
     fig.canvas.draw_idle()
@@ -2019,17 +1953,165 @@ def create_telemetry_figure():
     return fig
 
 
-def get_telemetry_lap_legend_entries():
+def set_reference_style(reference_lap_number):
+    """Apply reference color only; no pair analysis is performed here."""
+    for info in valid_lap_info:
+        lap_number = info["lap_number"]
+        is_reference = lap_number == reference_lap_number
+        color = (
+            "lime"
+            if is_reference
+            else lap_base_colors[lap_number]
+        )
+        lap_colors[lap_number] = color
+
+        for line in lap_lines[lap_number]:
+            line.set_color(color)
+
+    fig.canvas.draw_idle()
+
+
+def clear_pair_analysis_plots():
+    """Hide pair-only plot artists without changing lap visibility state."""
+    for lap_number in delta_lines:
+        delta_lines[lap_number]._pair_active = False
+        delta_lines[lap_number].set_visible(False)
+        deviation_lines[lap_number]._pair_active = False
+        deviation_lines[lap_number].set_visible(False)
+
+    ax_delta.set_title("Delta")
+    fig.canvas.draw_idle()
+
+
+def update_pair_analysis(
+    reference_lap_number,
+    comparison_lap_number,
+    pair_result
+):
+    """Display cached/calculated data for one ordered comparison pair."""
+    reference_info = next(
+        info
+        for info in valid_lap_info
+        if info["lap_number"] == reference_lap_number
+    )
+    comparison_info = next(
+        info
+        for info in valid_lap_info
+        if info["lap_number"] == comparison_lap_number
+    )
+
+    for lap_number in delta_lines:
+        is_comparison = lap_number == comparison_lap_number
+        lap_is_visible = speed_lines[lap_number].get_visible()
+        delta_lines[lap_number]._pair_active = is_comparison
+        delta_lines[lap_number].set_visible(
+            is_comparison and lap_is_visible
+        )
+        deviation_lines[lap_number]._pair_active = is_comparison
+        deviation_lines[lap_number].set_visible(
+            is_comparison and lap_is_visible
+        )
+
+    official_delta = (
+        comparison_info["lap_time_ms"]
+        - reference_info["lap_time_ms"]
+    ) / 1000
+    delta_lines[comparison_lap_number].set_ydata(
+        pair_result["delta"][::PLOT_STEP]
+    )
+    delta_lines[comparison_lap_number].set_label(
+        f"Lap {comparison_lap_number} "
+        f"({official_delta:+.3f}s)"
+    )
+    deviation_lines[comparison_lap_number].set_ydata(
+        pair_result["line_deviation"][::PLOT_STEP]
+    )
+
+    ax_delta.set_title(
+        f"Delta vs Lap {reference_lap_number} - "
+        f"{format_lap_time(reference_info['lap_time_ms'])}"
+    )
+    fig.canvas.draw_idle()
+
+
+def get_telemetry_lap_legend_entries(reference_lap_number=None):
     """Return lap labels, display colors, and reference status for the Qt UI."""
     return [
         (
             info["lap_number"],
             f"Lap {info['lap_number']}",
             to_hex(lap_colors[info["lap_number"]]),
-            info["lap_number"] == best_lap_number,
+            info["lap_number"] == reference_lap_number,
         )
         for info in valid_lap_info
     ]
+
+
+def get_telemetry_lap_entries():
+    """Return valid completed lap details for the Qt session lap list."""
+    return [
+        (
+            info["lap_number"],
+            (
+                format_lap_time(info["lap_time_ms"])
+                if info["lap_time_ms"] is not None
+                else "NO TIME"
+            ),
+            (
+                "BEST"
+                if info["lap_number"] == best_lap_number
+                else (
+                    f"{(info['lap_time_ms'] - best_lap_info['lap_time_ms']) / 1000:+.3f}"
+                    if info["lap_time_ms"] is not None
+                    else "NO DELTA"
+                )
+            ),
+            info["lap_number"] == best_lap_number,
+        )
+        for info in sorted(
+            valid_lap_info,
+            key=lambda lap: lap["lap_number"]
+        )
+    ]
+
+
+def get_telemetry_session_display_name():
+    """Return a timestamp label derived from the loaded session filename."""
+    try:
+        session_time = datetime.strptime(
+            CSV_FILE.name,
+            "acc_session_%Y%m%d_%H%M%S.csv"
+        )
+    except ValueError:
+        return CSV_FILE.stem
+
+    return session_time.strftime("%d %b %Y %H:%M")
+
+
+def zoom_to_analysis_section(section_number, clearance=0.15):
+    """Zoom every telemetry axis to a detected section with proportional padding."""
+    section = next(
+        (
+            section
+            for section in analysis_sections
+            if section["section_number"] == int(section_number)
+        ),
+        None,
+    )
+
+    if section is None:
+        return
+
+    section_start = section["start_position"]
+    section_end = section["end_position"]
+    padding = (section_end - section_start) * clearance
+    visible_start = max(common_position[0], section_start - padding) * 100
+    visible_end = min(common_position[-1], section_end + padding) * 100
+
+    for ax in axes:
+        ax.set_xlim(visible_start, visible_end)
+
+    fig.canvas.draw_idle()
 
 
 if __name__ == "__main__":

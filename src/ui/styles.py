@@ -67,6 +67,7 @@ QWidget#bestLapRow {
 QLabel#lapText,
 QLabel#lapTime,
 QLabel#lapStatus,
+QLabel#lapDelta,
 QLabel#bestLapText {
     background-color: transparent;
     border: none;
@@ -79,6 +80,11 @@ QLabel#lapText {
 
 QLabel#lapTime {
     color: #aeb3aa;
+}
+
+QLabel#lapDelta {
+    color: #8d9289;
+    font-size: 11px;
 }
 
 QLabel#bestLapText {
@@ -197,6 +203,76 @@ QLabel#inspectionPlaceholder {
     border: none;
     color: #7f857b;
     padding: 5px 1px;
+}
+
+QWidget#analysisModeControls,
+QWidget#analysisContent,
+QScrollArea#analysisScrollArea,
+QScrollArea#analysisScrollArea QWidget#qt_scrollarea_viewport {
+    background-color: transparent;
+    border: none;
+}
+
+QPushButton#analysisModeButton {
+    background-color: transparent;
+    border: none;
+    border-bottom: 1px solid #333732;
+    border-radius: 0;
+    color: #7f857b;
+    font-size: 11px;
+    font-weight: 600;
+    padding: 3px 1px 4px 1px;
+}
+
+QPushButton#analysisModeButton:hover {
+    color: #c8ccc4;
+    border-bottom-color: #555a52;
+}
+
+QPushButton#analysisModeButton:checked {
+    color: #b9dc45;
+    border-bottom-color: #778b3c;
+}
+
+QLabel#analysisEmptyState,
+QLabel#analysisRawDetail {
+    background-color: transparent;
+    color: #7f857b;
+}
+
+QLabel#analysisHeadline {
+    background-color: transparent;
+    color: #eceee8;
+    font-size: 13px;
+    font-weight: 600;
+    padding: 2px 0 7px 0;
+}
+
+QLabel#analysisOverallHeadline {
+    background-color: transparent;
+    color: #b9dc45;
+    font-size: 12px;
+    font-weight: 600;
+    padding: 2px 0 5px 0;
+}
+
+QLabel#analysisGroupHeading,
+QLabel#analysisRawName {
+    background-color: transparent;
+    color: #8d9289;
+    font-size: 10px;
+    font-weight: 600;
+    padding: 6px 0 0 0;
+}
+
+QLabel#analysisSummaryText,
+QLabel#analysisRawValue {
+    background-color: transparent;
+    color: #d7dad3;
+}
+
+QLabel#analysisRawDetail {
+    font-size: 11px;
 }
 
 QLabel#stateReadout {

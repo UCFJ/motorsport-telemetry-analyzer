@@ -181,28 +181,28 @@ def analyze_section_conclusion(
     if abs(section_delta) < TIME_DISPLAY_THRESHOLD:
 
         headline = (
-            f"Section {section_number} — "
+            f"Section {section_number} - "
             f"No time difference"
         )
 
     elif section_delta > 0:
 
         headline = (
-            f"Section {section_number} — "
+            f"Section {section_number} - "
             f"Lost {abs(section_delta):.3f} s"
         )
 
     elif section_delta < 0:
 
         headline = (
-            f"Section {section_number} — "
+            f"Section {section_number} - "
             f"Gained {abs(section_delta):.3f} s"
         )
 
     else:
 
         headline = (
-            f"Section {section_number} — "
+            f"Section {section_number} - "
             f"No time difference"
         )
 

@@ -58,6 +58,20 @@ QLabel#sessionValue {
     padding: 1px;
 }
 
+QPushButton#openSessionButton {
+    background-color: #1c1f1c;
+    border: 1px solid #333732;
+    border-radius: 1px;
+    color: #c8ccc4;
+    font-size: 11px;
+    padding: 3px 7px;
+}
+
+QPushButton#openSessionButton:hover {
+    background-color: #20231f;
+    border-color: #4a4e47;
+}
+
 QWidget#lapRow,
 QWidget#bestLapRow {
     background-color: transparent;
@@ -99,6 +113,13 @@ QLabel#bestText {
     font-size: 10px;
     font-weight: 700;
     padding: 0;
+}
+
+QWidget#lapRow:disabled QLabel#lapTime,
+QWidget#lapRow:disabled QLabel#lapDelta,
+QWidget#bestLapRow:disabled QLabel#bestLapText,
+QWidget#bestLapRow:disabled QLabel#bestText {
+    color: #5f645c;
 }
 
 QComboBox#panelComboBox {

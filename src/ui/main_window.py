@@ -1,5 +1,7 @@
 """Main window and layout for the telemetry analyzer UI."""
 
+from pathlib import Path
+
 from matplotlib.backends.backend_qtagg import (
     FigureCanvasQTAgg as FigureCanvas,
     NavigationToolbar2QT as NavigationToolbar,
@@ -9,10 +11,12 @@ from PySide6.QtWidgets import (
     QButtonGroup,
     QCheckBox,
     QComboBox,
+    QFileDialog,
     QFrame,
     QHBoxLayout,
     QLabel,
     QMainWindow,
+    QMessageBox,
     QPushButton,
     QScrollArea,
     QSizePolicy,
@@ -25,33 +29,19 @@ class MainWindow(QMainWindow):
     """Resizable shell for the Motorsport Telemetry Performance Analyzer."""
 
     LAP_PLACEHOLDER = "Select lap..."
+    SECTION_PLACEHOLDER = "Select section..."
 
     def __init__(self) -> None:
         super().__init__()
 
-        from src.analysis.shared_memory_laps import (
-            clear_pair_analysis_plots,
-            get_or_calculate_pair_analysis,
-            get_telemetry_lap_entries,
-            get_telemetry_lap_legend_entries,
-            get_telemetry_session_display_name,
-            set_lap_visibility,
-            set_reference_style,
-            update_pair_analysis,
-            zoom_to_analysis_section,
-        )
+        from src.analysis import shared_memory_laps as telemetry_session
 
-        self.clear_pair_analysis_plots = clear_pair_analysis_plots
-        self.get_or_calculate_pair_analysis = get_or_calculate_pair_analysis
-        self.get_telemetry_lap_legend_entries = (
-            get_telemetry_lap_legend_entries
+        self._bind_telemetry_session(telemetry_session)
+        self.current_session_path = Path(telemetry_session.CSV_FILE)
+        self.session_display_name = (
+            telemetry_session.get_telemetry_session_display_name()
         )
-        self.set_telemetry_reference_style = set_reference_style
-        self.set_telemetry_lap_visibility = set_lap_visibility
-        self.update_telemetry_pair_analysis = update_pair_analysis
-        self.zoom_to_telemetry_section = zoom_to_analysis_section
-        self.session_display_name = get_telemetry_session_display_name()
-        self.session_lap_entries = get_telemetry_lap_entries()
+        self.session_lap_entries = telemetry_session.get_telemetry_lap_entries()
         self.selected_reference_lap = next(
             lap_number
             for lap_number, _lap_time, _lap_delta, is_best
@@ -71,9 +61,14 @@ class MainWindow(QMainWindow):
             for lap_number, _label, _color, _is_reference in reference_entries
         )
         self.selected_compare_lap = None
-        self.selected_section = 1
+        self.selected_section = None
         self.analysis_cache = {}
         self.current_pair_analysis = None
+        self.pair_only_enabled = True
+        self.normal_lap_visibility = {
+            lap_number: True
+            for lap_number, *_rest in self.session_lap_entries
+        }
 
         self.setWindowTitle("Motorsport Telemetry Performance Analyzer")
         self.resize(1280, 760)
@@ -99,6 +94,29 @@ class MainWindow(QMainWindow):
         panels_layout.addWidget(self._build_center_panel(), 65)
         panels_layout.addWidget(self._build_right_panel(), 20)
 
+    def _bind_telemetry_session(self, telemetry_session) -> None:
+        self.telemetry_session = telemetry_session
+        self.clear_pair_analysis_plots = (
+            telemetry_session.clear_pair_analysis_plots
+        )
+        self.get_or_calculate_pair_analysis = (
+            telemetry_session.get_or_calculate_pair_analysis
+        )
+        self.get_telemetry_lap_legend_entries = (
+            telemetry_session.get_telemetry_lap_legend_entries
+        )
+        self.set_telemetry_reference_style = (
+            telemetry_session.set_reference_style
+        )
+        self.set_telemetry_lap_visibility = telemetry_session.set_lap_visibility
+        self.restore_telemetry_full_lap_view = (
+            telemetry_session.restore_full_lap_view
+        )
+        self.update_telemetry_pair_analysis = telemetry_session.update_pair_analysis
+        self.zoom_to_telemetry_section = (
+            telemetry_session.zoom_to_analysis_section
+        )
+
     def _build_left_panel(self) -> QFrame:
         panel, layout = self._create_panel("LAPS")
         panel.setObjectName("leftPanel")
@@ -106,29 +124,41 @@ class MainWindow(QMainWindow):
 
         layout.addWidget(self._create_section_label("Session"))
 
-        session_label = QLabel(self.session_display_name)
-        session_label.setObjectName("sessionValue")
-        layout.addWidget(session_label)
+        self.session_label = QLabel(self.session_display_name)
+        self.session_label.setObjectName("sessionValue")
+        layout.addWidget(self.session_label)
+
+        self.open_session_button = QPushButton("Open session")
+        self.open_session_button.setObjectName("openSessionButton")
+        self.open_session_button.setSizePolicy(
+            QSizePolicy.Policy.Maximum,
+            QSizePolicy.Policy.Fixed,
+        )
+        self.open_session_button.clicked.connect(self._open_session)
+        layout.addWidget(self.open_session_button)
 
         layout.addSpacing(4)
-        layout.addWidget(self._create_section_label("Laps"))
-        self.lap_visibility_controls = {}
 
-        for (
-            lap_number,
-            lap_time,
-            lap_delta_to_best,
-            is_best,
-        ) in self.session_lap_entries:
-            layout.addWidget(
-                self._create_lap_row(
-                    lap_number,
-                    lap_time,
-                    lap_delta_to_best,
-                    self.lap_display_colors[lap_number],
-                    is_best=is_best,
-                )
-            )
+        laps_header = QWidget()
+        laps_header_layout = QHBoxLayout(laps_header)
+        laps_header_layout.setContentsMargins(0, 0, 0, 0)
+        laps_header_layout.setSpacing(6)
+        laps_header_layout.addWidget(self._create_section_label("Laps"))
+        laps_header_layout.addStretch(1)
+        self.pair_only_control = QCheckBox("Pair only")
+        self.pair_only_control.setObjectName("pairOnlyControl")
+        self.pair_only_control.setChecked(self.pair_only_enabled)
+        laps_header_layout.addWidget(self.pair_only_control)
+        layout.addWidget(laps_header)
+
+        self.lap_visibility_controls = {}
+        self.lap_rows = {}
+        self.laps_container = QWidget()
+        self.laps_layout = QVBoxLayout(self.laps_container)
+        self.laps_layout.setContentsMargins(0, 0, 0, 0)
+        self.laps_layout.setSpacing(6)
+        layout.addWidget(self.laps_container)
+        self._rebuild_lap_rows()
 
         layout.addSpacing(4)
         layout.addWidget(self._create_section_label("Reference"))
@@ -156,7 +186,8 @@ class MainWindow(QMainWindow):
         layout.addSpacing(2)
         layout.addWidget(self._create_section_label("Section"))
         self.section_combo_box = self._create_combo_box(
-            [f"Section {number}" for number in range(1, 8)]
+            [self.SECTION_PLACEHOLDER]
+            + [f"Section {number}" for number in range(1, 8)]
         )
         layout.addWidget(self.section_combo_box)
 
@@ -171,12 +202,160 @@ class MainWindow(QMainWindow):
             self._on_compare_changed
         )
         self.section_combo_box.currentTextChanged.connect(self._on_section_changed)
+        self.pair_only_control.toggled.connect(self._set_pair_only_enabled)
+        self._apply_pair_only_visibility(
+            laps_to_show=self._selected_pair_laps()
+        )
         self._update_state_readout()
 
         layout.addStretch(1)
         return panel
 
+    def _open_session(self) -> None:
+        selected_path, _selected_filter = QFileDialog.getOpenFileName(
+            self,
+            "Open telemetry session",
+            str(self.current_session_path.parent),
+            "CSV files (*.csv);;All files (*)",
+        )
+
+        if not selected_path:
+            return
+
+        try:
+            candidate = self._load_session_candidate(Path(selected_path))
+            self._commit_session(candidate)
+        except Exception as error:
+            QMessageBox.critical(
+                self,
+                "Unable to open session",
+                "The selected telemetry session could not be loaded.\n\n"
+                f"{error}",
+            )
+            return
+
+    def _load_session_candidate(self, path: Path):
+        return self.telemetry_session.load_session_candidate(path)
+
+    def _commit_session(self, candidate) -> None:
+        session_lap_entries = candidate.get_telemetry_lap_entries()
+        selected_reference_lap = next(
+            lap_number
+            for lap_number, _lap_time, _lap_delta, is_best
+            in session_lap_entries
+            if is_best
+        )
+        candidate.set_reference_style(selected_reference_lap)
+        reference_entries = candidate.get_telemetry_lap_legend_entries(
+            selected_reference_lap
+        )
+        candidate_figure = candidate.create_telemetry_figure()
+
+        if not isinstance(candidate_figure.canvas, FigureCanvas):
+            candidate.plt.close(candidate_figure)
+            raise RuntimeError("The telemetry figure is not using a Qt canvas.")
+
+        channel_states = {
+            channel: control.isChecked()
+            for channel, control in self.channel_visibility_controls.items()
+        }
+
+        self._bind_telemetry_session(candidate)
+        self.current_session_path = Path(candidate.CSV_FILE)
+        self.session_display_name = candidate.get_telemetry_session_display_name()
+        self.session_lap_entries = session_lap_entries
+        self.selected_reference_lap = selected_reference_lap
+        self.selected_compare_lap = None
+        self.selected_section = None
+        self.current_pair_analysis = None
+        self.analysis_cache.clear()
+        self.pair_only_enabled = True
+        self.normal_lap_visibility = {
+            lap_number: True
+            for lap_number, *_rest in self.session_lap_entries
+        }
+        self.lap_display_colors = {
+            lap_number: color
+            for lap_number, _label, color, _is_reference in reference_entries
+        }
+        self.reference_lap_numbers = sorted(
+            lap_number
+            for lap_number, _label, _color, _is_reference in reference_entries
+        )
+
+        self._replace_telemetry_viewer(candidate, channel_states)
+        self._rebuild_lap_rows()
+        self._reset_session_selectors()
+        self._apply_pair_only_visibility(
+            laps_to_show=self._selected_pair_laps()
+        )
+        self.restore_telemetry_full_lap_view()
+        self.session_label.setText(self.session_display_name)
+        self._update_state_readout()
+        self.refresh_analysis_panel()
+
+    def _reset_session_selectors(self) -> None:
+        self.reference_combo_box.blockSignals(True)
+        self.reference_combo_box.clear()
+        self.reference_combo_box.addItems(
+            [self.LAP_PLACEHOLDER]
+            + [f"Lap {lap_number}" for lap_number in self.reference_lap_numbers]
+        )
+        self.reference_combo_box.setCurrentText(
+            f"Lap {self.selected_reference_lap}"
+        )
+        self.reference_combo_box.blockSignals(False)
+
+        self.compare_combo_box.blockSignals(True)
+        self.compare_combo_box.clear()
+        self.compare_combo_box.addItems(
+            [self.LAP_PLACEHOLDER]
+            + [
+                f"Lap {lap_number}"
+                for lap_number in self.reference_lap_numbers
+                if lap_number != self.selected_reference_lap
+            ]
+        )
+        self.compare_combo_box.setCurrentText(self.LAP_PLACEHOLDER)
+        self.compare_combo_box.blockSignals(False)
+
+        self.section_combo_box.blockSignals(True)
+        self.section_combo_box.setCurrentText(self.SECTION_PLACEHOLDER)
+        self.section_combo_box.blockSignals(False)
+
+        self.pair_only_control.blockSignals(True)
+        self.pair_only_control.setChecked(True)
+        self.pair_only_control.blockSignals(False)
+
+    def _rebuild_lap_rows(self) -> None:
+        while self.laps_layout.count():
+            item = self.laps_layout.takeAt(0)
+            widget = item.widget()
+
+            if widget is not None:
+                widget.deleteLater()
+
+        self.lap_visibility_controls = {}
+        self.lap_rows = {}
+
+        for (
+            lap_number,
+            lap_time,
+            lap_delta_to_best,
+            is_best,
+        ) in self.session_lap_entries:
+            self.laps_layout.addWidget(
+                self._create_lap_row(
+                    lap_number,
+                    lap_time,
+                    lap_delta_to_best,
+                    self.lap_display_colors[lap_number],
+                    is_best=is_best,
+                )
+            )
+
     def _on_reference_changed(self, value: str) -> None:
+        previous_pair_laps = self._selected_pair_laps()
         self.selected_reference_lap = self._lap_number_from_text(value)
         self._refresh_compare_options()
         self.set_telemetry_reference_style(self.selected_reference_lap)
@@ -185,17 +364,102 @@ class MainWindow(QMainWindow):
                 self.selected_reference_lap
             )
         )
+        self._apply_pair_only_visibility(
+            laps_to_show=self._selected_pair_laps() - previous_pair_laps
+        )
         self._request_pair_analysis()
         self._update_state_readout()
 
     def _on_compare_changed(self, value: str) -> None:
+        previous_pair_laps = self._selected_pair_laps()
         self.selected_compare_lap = self._lap_number_from_text(value)
+        self._apply_pair_only_visibility(
+            laps_to_show=self._selected_pair_laps() - previous_pair_laps
+        )
         self._request_pair_analysis()
         self._update_state_readout()
 
+    def _selected_pair_laps(self) -> set[int]:
+        return {
+            lap_number
+            for lap_number in (
+                self.selected_reference_lap,
+                self.selected_compare_lap,
+            )
+            if lap_number is not None
+        }
+
+    def _set_pair_only_enabled(self, enabled: bool) -> None:
+        if enabled:
+            self.normal_lap_visibility = {
+                lap_number: control.isChecked()
+                for lap_number, control
+                in self.lap_visibility_controls.items()
+            }
+
+        self.pair_only_enabled = enabled
+
+        if enabled:
+            self._apply_pair_only_visibility(
+                laps_to_show=self._selected_pair_laps()
+            )
+            return
+
+        for lap_number, control in self.lap_visibility_controls.items():
+            self.lap_rows[lap_number].setEnabled(True)
+            self._set_lap_control_visibility(
+                lap_number,
+                self.normal_lap_visibility[lap_number],
+            )
+
+    def _apply_pair_only_visibility(
+        self,
+        laps_to_show: set[int] | None = None,
+    ) -> None:
+        if not self.pair_only_enabled:
+            return
+
+        allowed_laps = self._selected_pair_laps()
+        laps_to_show = laps_to_show or set()
+
+        for lap_number in self.lap_visibility_controls:
+            is_allowed = lap_number in allowed_laps
+            self.lap_rows[lap_number].setEnabled(is_allowed)
+
+            if not is_allowed:
+                self._set_lap_control_visibility(lap_number, False)
+            elif lap_number in laps_to_show:
+                self._set_lap_control_visibility(lap_number, True)
+
+    def _set_lap_control_visibility(
+        self,
+        lap_number: int,
+        visible: bool,
+    ) -> None:
+        control = self.lap_visibility_controls[lap_number]
+        control.blockSignals(True)
+        control.setChecked(visible)
+        control.blockSignals(False)
+        self.set_telemetry_lap_visibility(lap_number, visible)
+
+    def _on_lap_visibility_toggled(
+        self,
+        lap_number: int,
+        visible: bool,
+    ) -> None:
+        if not self.pair_only_enabled:
+            self.normal_lap_visibility[lap_number] = visible
+
+        self.set_telemetry_lap_visibility(lap_number, visible)
+
     def _on_section_changed(self, value: str) -> None:
-        self.selected_section = int(value.split()[-1])
-        self.zoom_to_telemetry_section(self.selected_section)
+        if value == self.SECTION_PLACEHOLDER:
+            self.selected_section = None
+            self.restore_telemetry_full_lap_view()
+        else:
+            self.selected_section = int(value.split()[-1])
+            self.zoom_to_telemetry_section(self.selected_section)
+
         self._update_state_readout()
         self.refresh_analysis_panel()
 
@@ -210,10 +474,15 @@ class MainWindow(QMainWindow):
             if self.selected_compare_lap is not None
             else self.LAP_PLACEHOLDER
         )
+        section_text = (
+            f"S{self.selected_section}"
+            if self.selected_section is not None
+            else self.SECTION_PLACEHOLDER
+        )
         self.state_readout.setText(
             f"Reference: {reference_text}\n"
             f"Compare: {compare_text}\n"
-            f"Section: S{self.selected_section}"
+            f"Section: {section_text}"
         )
 
     def _refresh_compare_options(self) -> None:
@@ -304,10 +573,11 @@ class MainWindow(QMainWindow):
         )
         visibility_control.toggled.connect(
             lambda visible, number=lap_number: (
-                self.set_telemetry_lap_visibility(number, visible)
+                self._on_lap_visibility_toggled(number, visible)
             )
         )
         self.lap_visibility_controls[lap_number] = visibility_control
+        self.lap_rows[lap_number] = row
         layout.addWidget(visibility_control)
 
         time_label = QLabel(lap_time)
@@ -335,29 +605,56 @@ class MainWindow(QMainWindow):
     def _build_center_panel(self) -> QFrame:
         panel, layout = self._create_panel("Telemetry")
         panel.setObjectName("workspacePanel")
+        self.telemetry_panel = panel
+        self.telemetry_layout = layout
+        self._install_telemetry_viewer(self.telemetry_session)
+        return panel
 
-        from src.analysis.shared_memory_laps import (
-            create_telemetry_figure,
-            set_graph_visibility,
-        )
-
-        self.telemetry_figure = create_telemetry_figure()
+    def _install_telemetry_viewer(
+        self,
+        telemetry_session,
+        channel_states: dict[str, bool] | None = None,
+    ) -> None:
+        self.telemetry_figure = telemetry_session.create_telemetry_figure()
         canvas = self.telemetry_figure.canvas
 
         if not isinstance(canvas, FigureCanvas):
             raise RuntimeError("The telemetry figure is not using a Qt canvas.")
 
         self.telemetry_canvas = canvas
-        self.telemetry_toolbar = NavigationToolbar(self.telemetry_canvas, panel)
+        self.telemetry_toolbar = NavigationToolbar(
+            self.telemetry_canvas,
+            self.telemetry_panel,
+        )
         self.telemetry_toolbar.setObjectName("telemetryToolbar")
         self.telemetry_channel_controls = self._create_channel_visibility_controls(
-            set_graph_visibility
+            telemetry_session.set_graph_visibility,
+            channel_states,
         )
 
-        layout.addWidget(self.telemetry_toolbar)
-        layout.addWidget(self.telemetry_channel_controls)
-        layout.addWidget(self.telemetry_canvas, 1)
-        return panel
+        self.telemetry_layout.addWidget(self.telemetry_toolbar)
+        self.telemetry_layout.addWidget(self.telemetry_channel_controls)
+        self.telemetry_layout.addWidget(self.telemetry_canvas, 1)
+
+    def _replace_telemetry_viewer(
+        self,
+        telemetry_session,
+        channel_states: dict[str, bool],
+    ) -> None:
+        old_figure = self.telemetry_figure
+        old_widgets = (
+            self.telemetry_toolbar,
+            self.telemetry_channel_controls,
+            self.telemetry_canvas,
+        )
+
+        for widget in old_widgets:
+            self.telemetry_layout.removeWidget(widget)
+            widget.setParent(None)
+            widget.deleteLater()
+
+        self._install_telemetry_viewer(telemetry_session, channel_states)
+        telemetry_session.plt.close(old_figure)
 
     def _update_lap_reference_controls(
         self,
@@ -382,15 +679,23 @@ class MainWindow(QMainWindow):
         control.setStyleSheet(
             f"QCheckBox {{ color: {color}; }} "
             "QCheckBox:unchecked { color: #5f645c; } "
+            "QCheckBox:disabled { color: #50554d; } "
             f"QCheckBox::indicator:checked {{ "
             f"background-color: {color}; border-color: {color}; "
             "} "
             "QCheckBox::indicator:unchecked { "
             "background-color: transparent; border-color: #555a52; "
+            "} "
+            "QCheckBox::indicator:disabled { "
+            "background-color: transparent; border-color: #454941; "
             "}"
         )
 
-    def _create_channel_visibility_controls(self, set_visibility) -> QWidget:
+    def _create_channel_visibility_controls(
+        self,
+        set_visibility,
+        channel_states: dict[str, bool] | None = None,
+    ) -> QWidget:
         controls = QWidget()
         controls.setObjectName("telemetryControlRow")
 
@@ -402,7 +707,7 @@ class MainWindow(QMainWindow):
         row_label.setObjectName("telemetryControlRowLabel")
         layout.addWidget(row_label)
 
-        initial_states = [
+        default_states = [
             ("Spd", True),
             ("Brk", True),
             ("Thr", True),
@@ -414,7 +719,12 @@ class MainWindow(QMainWindow):
 
         self.channel_visibility_controls = {}
 
-        for channel, is_visible in initial_states:
+        for channel, default_visible in default_states:
+            is_visible = (
+                channel_states.get(channel, default_visible)
+                if channel_states is not None
+                else default_visible
+            )
             control = QCheckBox(channel)
             control.setObjectName("telemetryChannelControl")
             control.setChecked(is_visible)
@@ -423,6 +733,9 @@ class MainWindow(QMainWindow):
             )
             self.channel_visibility_controls[channel] = control
             layout.addWidget(control)
+
+            if channel_states is not None:
+                set_visibility(channel, is_visible)
 
         layout.addStretch(1)
         return controls
@@ -507,6 +820,14 @@ class MainWindow(QMainWindow):
             ),
             "analysisOverallHeadline",
         )
+
+        if self.selected_section is None:
+            self._add_analysis_label(
+                "Select a section to view analysis.",
+                "analysisEmptyState",
+            )
+            self.analysis_content_layout.addStretch(1)
+            return
 
         result_key = (
             "observations"

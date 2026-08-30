@@ -1,3 +1,4 @@
+import importlib.util
 from datetime import datetime
 from pathlib import Path
 
@@ -46,10 +47,13 @@ DATA_DIR = (
     / "shared_memory"
 )
 
-CSV_FILE = (
-    DATA_DIR
-    / "acc_session_20260813_035056.csv"
+CSV_FILE = Path(
+    globals().get(
+        "CSV_FILE",
+        DATA_DIR / "acc_session_20260813_035056.csv",
+    )
 )
+
 
 def apply_dark_style(fig, ax):
     fig.patch.set_facecolor("black")
@@ -2086,6 +2090,48 @@ def get_telemetry_session_display_name():
         return CSV_FILE.stem
 
     return session_time.strftime("%d %b %Y %H:%M")
+
+
+default_telemetry_xlim = ax_speed.get_xlim()
+
+
+def restore_full_lap_view():
+    """Restore the initial horizontal range on every telemetry axis."""
+    for ax in axes:
+        ax.set_xlim(*default_telemetry_xlim)
+
+    fig.canvas.draw_idle()
+
+
+def load_session_candidate(path):
+    """Build and validate an isolated session module for a selected CSV."""
+    module_name = f"{__name__}_candidate"
+    spec = importlib.util.spec_from_file_location(module_name, __file__)
+
+    if spec is None or spec.loader is None:
+        raise RuntimeError("The telemetry session loader is unavailable.")
+
+    candidate = importlib.util.module_from_spec(spec)
+    candidate.CSV_FILE = Path(path)
+
+    try:
+        spec.loader.exec_module(candidate)
+        entries = candidate.get_telemetry_lap_entries()
+
+        if not entries or not any(entry[3] for entry in entries):
+            raise ValueError("No usable reference-eligible laps were found.")
+    except SystemExit as error:
+        candidate_figure = getattr(candidate, "fig", None)
+        if candidate_figure is not None:
+            plt.close(candidate_figure)
+        raise ValueError(str(error) or "No usable laps were found.") from error
+    except Exception:
+        candidate_figure = getattr(candidate, "fig", None)
+        if candidate_figure is not None:
+            plt.close(candidate_figure)
+        raise
+
+    return candidate
 
 
 def zoom_to_analysis_section(section_number, clearance=0.15):

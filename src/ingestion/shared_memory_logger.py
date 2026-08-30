@@ -1,23 +1,24 @@
-from pathlib import Path
+import argparse
 import csv
+import sys
+import threading
 import time
+from pathlib import Path
 
 from pyaccsharedmemory import accSharedMemory
 
+from src.ingestion.paths import get_default_shared_memory_output_dir
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 
-OUTPUT_DIR = (
-    PROJECT_ROOT
-    / "data"
-    / "raw"
-    / "shared_memory"
-)
+FLUSH_EVERY_ROWS = 25
 
-OUTPUT_DIR.mkdir(
-    parents=True,
-    exist_ok=True
-)
+
+def listen_for_stop_command(stop_event):
+    """Watch stdin for the UI's simple graceful-stop command."""
+    for line in sys.stdin:
+        if line.strip().lower() == "stop":
+            stop_event.set()
+            return
 
 
 def get_player_coordinates(data):
@@ -62,6 +63,13 @@ FIELDNAMES = [
 
 def record_session(output_file, sample_interval=0.01):
     asm = accSharedMemory()
+    stop_event = threading.Event()
+    stop_listener = threading.Thread(
+        target=listen_for_stop_command,
+        args=(stop_event,),
+        daemon=True,
+    )
+    stop_listener.start()
 
     start_time = time.perf_counter()
     lap_number = 0
@@ -81,13 +89,15 @@ def record_session(output_file, sample_interval=0.01):
         )
 
         writer.writeheader()
+        file.flush()
+        rows_since_flush = 0
 
         print("Recording ACC telemetry...")
         print("Press Ctrl+C to stop.")
         print()
 
         try:
-            while True:
+            while not stop_event.is_set():
                 data = asm.read_shared_memory()
 
                 if data is None:
@@ -148,28 +158,55 @@ def record_session(output_file, sample_interval=0.01):
                 }
 
                 writer.writerow(row)
+                rows_since_flush += 1
+
+                if rows_since_flush >= FLUSH_EVERY_ROWS:
+                    file.flush()
+                    rows_since_flush = 0
 
                 time.sleep(sample_interval)
+
+            print()
+            print("Recording stopped.")
 
         except KeyboardInterrupt:
             print()
             print("Recording stopped.")
 
         finally:
+            file.flush()
             asm.close()
 
 
-if __name__ == "__main__":
+def parse_args(argv=None):
+    parser = argparse.ArgumentParser(description="Record ACC shared-memory data.")
+    parser.add_argument(
+        "--output-dir",
+        type=Path,
+        default=get_default_shared_memory_output_dir(),
+        help="Directory in which to create the telemetry session CSV.",
+    )
+    return parser.parse_args(argv)
+
+
+def main(argv=None):
+    args = parse_args(argv)
+    output_dir = args.output_dir.expanduser().resolve()
+    output_dir.mkdir(parents=True, exist_ok=True)
     filename = (
         "acc_session_"
         + time.strftime("%Y%m%d_%H%M%S")
         + ".csv"
     )
 
-    output_file = OUTPUT_DIR / filename
+    output_file = output_dir / filename
 
     print("Saving to:")
     print(output_file)
     print()
 
     record_session(output_file)
+
+
+if __name__ == "__main__":
+    main()

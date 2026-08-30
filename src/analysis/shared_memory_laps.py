@@ -1,9 +1,9 @@
-import importlib.util
 from datetime import datetime
 from pathlib import Path
 
 import matplotlib.pyplot as plt
 import numpy as np
+import pandas as pd
 from matplotlib.colors import to_hex
 
 from src.ingestion.shared_memory_loader import load_shared_memory_csv
@@ -53,6 +53,7 @@ CSV_FILE = Path(
         DATA_DIR / "acc_session_20260813_035056.csv",
     )
 )
+from src.analysis.session_loader import load_session_candidate
 
 
 def apply_dark_style(fig, ax):
@@ -88,7 +89,114 @@ def format_lap_time(milliseconds):
     return f"{minutes}:{seconds:06.3f}"
 
 
+REQUIRED_SESSION_COLUMNS = (
+    "lap_number",
+    "is_valid_lap",
+    "completed_laps",
+    "acc_last_lap_ms",
+    "normalized_position",
+    "speed_kmh",
+    "brake",
+    "throttle",
+    "steering",
+    "lap_time_s",
+    "world_x",
+    "world_z",
+)
+
+ALIGNMENT_COLUMNS = (
+    "normalized_position",
+    "speed_kmh",
+    "brake",
+    "throttle",
+    "steering",
+    "lap_time_s",
+    "world_x",
+    "world_z",
+)
+
+
+def prepare_session_rows(session_df):
+    """Validate required fields and discard rows without a real lap identifier."""
+    if "lap_number" not in session_df.columns:
+        raise ValueError("missing lap_number")
+
+    if "is_valid_lap" not in session_df.columns:
+        raise ValueError("missing is_valid_lap")
+
+    missing_columns = [
+        column
+        for column in REQUIRED_SESSION_COLUMNS
+        if column not in session_df.columns
+    ]
+
+    if missing_columns:
+        raise ValueError(
+            "missing required telemetry columns: "
+            + ", ".join(missing_columns)
+        )
+
+    lap_numbers = pd.to_numeric(
+        session_df["lap_number"],
+        errors="coerce",
+    )
+    usable_identifiers = (
+        lap_numbers.notna()
+        & np.isfinite(lap_numbers)
+        & (lap_numbers == np.floor(lap_numbers))
+    )
+    skipped_rows = int((~usable_identifiers).sum())
+
+    if skipped_rows:
+        print(
+            "SESSION LOAD: skipped "
+            f"{skipped_rows} row(s) with invalid lap identifiers"
+        )
+
+    prepared_df = session_df.loc[usable_identifiers].copy()
+
+    if prepared_df.empty:
+        raise ValueError("no usable lap identifiers")
+
+    prepared_df["lap_number"] = (
+        lap_numbers.loc[usable_identifiers].astype(int)
+    )
+    prepared_df["completed_laps"] = pd.to_numeric(
+        prepared_df["completed_laps"],
+        errors="coerce",
+    )
+    prepared_df["acc_last_lap_ms"] = pd.to_numeric(
+        prepared_df["acc_last_lap_ms"],
+        errors="coerce",
+    )
+    return prepared_df
+
+
+def prepare_lap_rows(lap):
+    """Return finite rows usable by the existing alignment pipeline."""
+    if lap.empty:
+        return lap, False
+
+    validity = lap["is_valid_lap"]
+    is_valid = bool(validity.notna().all() and validity.all())
+    numeric_telemetry = lap[list(ALIGNMENT_COLUMNS)].apply(
+        pd.to_numeric,
+        errors="coerce",
+    )
+    usable_rows = np.isfinite(numeric_telemetry).all(axis=1)
+    prepared_lap = lap.loc[usable_rows].copy()
+    prepared_lap.loc[:, list(ALIGNMENT_COLUMNS)] = (
+        numeric_telemetry.loc[usable_rows]
+    )
+    has_usable_samples = (
+        len(prepared_lap) >= 2
+        and prepared_lap["normalized_position"].nunique() >= 2
+    )
+    return prepared_lap.reset_index(drop=True), is_valid and has_usable_samples
+
+
 df = load_shared_memory_csv(CSV_FILE)
+df = prepare_session_rows(df)
 
 max_lap_number = int(
     df["lap_number"].max()
@@ -125,9 +233,8 @@ lap_info = []
 
 for lap_number, lap in laps.items():
 
-    is_valid = (
-        lap["is_valid_lap"].all()
-    )
+    lap, is_valid = prepare_lap_rows(lap)
+    laps[lap_number] = lap
 
     next_lap = df[
         df["lap_number"]
@@ -139,17 +246,18 @@ for lap_number, lap in laps.items():
         >= lap_number
     ]
 
-    if completed_rows.empty:
+    lap_time_values = completed_rows["acc_last_lap_ms"]
+    usable_lap_times = lap_time_values[
+        lap_time_values.notna() & np.isfinite(lap_time_values)
+    ]
+
+    if usable_lap_times.empty:
 
         lap_time_ms = None
 
     else:
 
-        lap_time_ms = int(
-            completed_rows[
-                "acc_last_lap_ms"
-            ].iloc[0]
-        )
+        lap_time_ms = int(usable_lap_times.iloc[0])
 
     lap_info.append(
         {
@@ -206,7 +314,7 @@ for info in lap_info:
 valid_lap_info = [
     info
     for info in lap_info
-    if info["is_valid"]
+    if info["is_valid"] and info["lap_time_ms"] is not None
 ]
 
 if not valid_lap_info:
@@ -2079,6 +2187,14 @@ def get_telemetry_lap_entries():
     ]
 
 
+def get_telemetry_section_numbers():
+    """Return section identifiers in the detector's output order."""
+    return [
+        section["section_number"]
+        for section in analysis_sections
+    ]
+
+
 def get_telemetry_session_display_name():
     """Return a timestamp label derived from the loaded session filename."""
     try:
@@ -2101,37 +2217,6 @@ def restore_full_lap_view():
         ax.set_xlim(*default_telemetry_xlim)
 
     fig.canvas.draw_idle()
-
-
-def load_session_candidate(path):
-    """Build and validate an isolated session module for a selected CSV."""
-    module_name = f"{__name__}_candidate"
-    spec = importlib.util.spec_from_file_location(module_name, __file__)
-
-    if spec is None or spec.loader is None:
-        raise RuntimeError("The telemetry session loader is unavailable.")
-
-    candidate = importlib.util.module_from_spec(spec)
-    candidate.CSV_FILE = Path(path)
-
-    try:
-        spec.loader.exec_module(candidate)
-        entries = candidate.get_telemetry_lap_entries()
-
-        if not entries or not any(entry[3] for entry in entries):
-            raise ValueError("No usable reference-eligible laps were found.")
-    except SystemExit as error:
-        candidate_figure = getattr(candidate, "fig", None)
-        if candidate_figure is not None:
-            plt.close(candidate_figure)
-        raise ValueError(str(error) or "No usable laps were found.") from error
-    except Exception:
-        candidate_figure = getattr(candidate, "fig", None)
-        if candidate_figure is not None:
-            plt.close(candidate_figure)
-        raise
-
-    return candidate
 
 
 def zoom_to_analysis_section(section_number, clearance=0.15):

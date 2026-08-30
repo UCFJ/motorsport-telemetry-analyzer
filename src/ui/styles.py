@@ -58,7 +58,8 @@ QLabel#sessionValue {
     padding: 1px;
 }
 
-QPushButton#openSessionButton {
+QPushButton#openSessionButton,
+QPushButton#loggingControlButton {
     background-color: #1c1f1c;
     border: 1px solid #333732;
     border-radius: 1px;
@@ -67,9 +68,24 @@ QPushButton#openSessionButton {
     padding: 3px 7px;
 }
 
-QPushButton#openSessionButton:hover {
+QPushButton#openSessionButton:hover,
+QPushButton#loggingControlButton:hover {
     background-color: #20231f;
     border-color: #4a4e47;
+}
+
+QLabel#loggingDirectoryValue {
+    background-color: transparent;
+    border: none;
+    color: #aeb3aa;
+    font-size: 10px;
+}
+
+QLabel#loggingStatusValue {
+    background-color: transparent;
+    border: none;
+    color: #c5c9c0;
+    font-size: 11px;
 }
 
 QWidget#lapRow,

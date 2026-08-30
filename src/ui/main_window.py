@@ -1,12 +1,14 @@
 """Main window and layout for the telemetry analyzer UI."""
 
 from pathlib import Path
+import sys
 
 from matplotlib.backends.backend_qtagg import (
     FigureCanvasQTAgg as FigureCanvas,
     NavigationToolbar2QT as NavigationToolbar,
 )
-from PySide6.QtCore import Qt
+from matplotlib.figure import Figure
+from PySide6.QtCore import QProcess, Qt
 from PySide6.QtWidgets import (
     QButtonGroup,
     QCheckBox,
@@ -24,6 +26,12 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from src.analysis.session_loader import load_session_candidate
+from src.ingestion.paths import (
+    PROJECT_ROOT,
+    get_default_shared_memory_output_dir,
+)
+
 
 class MainWindow(QMainWindow):
     """Resizable shell for the Motorsport Telemetry Performance Analyzer."""
@@ -34,41 +42,30 @@ class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
 
-        from src.analysis import shared_memory_laps as telemetry_session
-
-        self._bind_telemetry_session(telemetry_session)
-        self.current_session_path = Path(telemetry_session.CSV_FILE)
-        self.session_display_name = (
-            telemetry_session.get_telemetry_session_display_name()
-        )
-        self.session_lap_entries = telemetry_session.get_telemetry_lap_entries()
-        self.selected_reference_lap = next(
-            lap_number
-            for lap_number, _lap_time, _lap_delta, is_best
-            in self.session_lap_entries
-            if is_best
-        )
-        self.set_telemetry_reference_style(self.selected_reference_lap)
-        reference_entries = self.get_telemetry_lap_legend_entries(
-            self.selected_reference_lap
-        )
-        self.lap_display_colors = {
-            lap_number: color
-            for lap_number, _label, color, _is_reference in reference_entries
-        }
-        self.reference_lap_numbers = sorted(
-            lap_number
-            for lap_number, _label, _color, _is_reference in reference_entries
-        )
+        self.telemetry_session = None
+        self.current_session_path = None
+        self.session_display_name = "No session loaded"
+        self.session_lap_entries = []
+        self.selected_reference_lap = None
         self.selected_compare_lap = None
         self.selected_section = None
         self.analysis_cache = {}
         self.current_pair_analysis = None
         self.pair_only_enabled = True
-        self.normal_lap_visibility = {
-            lap_number: True
-            for lap_number, *_rest in self.session_lap_entries
-        }
+        self.normal_lap_visibility = {}
+        self.lap_display_colors = {}
+        self.reference_lap_numbers = []
+        self.section_numbers = []
+        self.logging_output_dir = get_default_shared_memory_output_dir()
+        self.logger_stop_requested = False
+        self.logger_error_reported = False
+        self.logger_process = QProcess(self)
+        self.logger_process.setProcessChannelMode(
+            QProcess.ProcessChannelMode.ForwardedChannels
+        )
+        self.logger_process.started.connect(self._on_logger_started)
+        self.logger_process.errorOccurred.connect(self._on_logger_error)
+        self.logger_process.finished.connect(self._on_logger_finished)
 
         self.setWindowTitle("Motorsport Telemetry Performance Analyzer")
         self.resize(1280, 760)
@@ -93,6 +90,7 @@ class MainWindow(QMainWindow):
         panels_layout.addWidget(self._build_left_panel(), 15)
         panels_layout.addWidget(self._build_center_panel(), 65)
         panels_layout.addWidget(self._build_right_panel(), 20)
+        self._set_session_controls_enabled(False)
 
     def _bind_telemetry_session(self, telemetry_session) -> None:
         self.telemetry_session = telemetry_session
@@ -104,6 +102,9 @@ class MainWindow(QMainWindow):
         )
         self.get_telemetry_lap_legend_entries = (
             telemetry_session.get_telemetry_lap_legend_entries
+        )
+        self.get_telemetry_section_numbers = (
+            telemetry_session.get_telemetry_section_numbers
         )
         self.set_telemetry_reference_style = (
             telemetry_session.set_reference_style
@@ -136,6 +137,36 @@ class MainWindow(QMainWindow):
         )
         self.open_session_button.clicked.connect(self._open_session)
         layout.addWidget(self.open_session_button)
+
+        layout.addSpacing(4)
+        layout.addWidget(self._create_section_label("Logging"))
+        layout.addWidget(self._create_section_label("Save to:"))
+
+        self.logging_directory_label = QLabel(str(self.logging_output_dir))
+        self.logging_directory_label.setObjectName("loggingDirectoryValue")
+        self.logging_directory_label.setToolTip(str(self.logging_output_dir))
+        self.logging_directory_label.setWordWrap(True)
+        layout.addWidget(self.logging_directory_label)
+
+        logging_buttons = QWidget()
+        logging_buttons_layout = QHBoxLayout(logging_buttons)
+        logging_buttons_layout.setContentsMargins(0, 0, 0, 0)
+        logging_buttons_layout.setSpacing(6)
+        self.choose_logging_folder_button = QPushButton("Choose folder")
+        self.choose_logging_folder_button.setObjectName("loggingControlButton")
+        self.choose_logging_folder_button.clicked.connect(
+            self._choose_logging_directory
+        )
+        logging_buttons_layout.addWidget(self.choose_logging_folder_button)
+        self.logging_toggle_button = QPushButton("Start logging")
+        self.logging_toggle_button.setObjectName("loggingControlButton")
+        self.logging_toggle_button.clicked.connect(self._toggle_logging)
+        logging_buttons_layout.addWidget(self.logging_toggle_button)
+        layout.addWidget(logging_buttons)
+
+        self.logging_status_label = QLabel("Status: Not logging")
+        self.logging_status_label.setObjectName("loggingStatusValue")
+        layout.addWidget(self.logging_status_label)
 
         layout.addSpacing(4)
 
@@ -187,7 +218,6 @@ class MainWindow(QMainWindow):
         layout.addWidget(self._create_section_label("Section"))
         self.section_combo_box = self._create_combo_box(
             [self.SECTION_PLACEHOLDER]
-            + [f"Section {number}" for number in range(1, 8)]
         )
         layout.addWidget(self.section_combo_box)
 
@@ -211,11 +241,135 @@ class MainWindow(QMainWindow):
         layout.addStretch(1)
         return panel
 
+    def _set_session_controls_enabled(self, enabled: bool) -> None:
+        self.reference_combo_box.setEnabled(enabled)
+        self.compare_combo_box.setEnabled(enabled)
+        self.section_combo_box.setEnabled(enabled)
+        self.pair_only_control.setEnabled(enabled)
+
+    def _choose_logging_directory(self) -> None:
+        selected_directory = QFileDialog.getExistingDirectory(
+            self,
+            "Choose telemetry logging folder",
+            str(self.logging_output_dir),
+        )
+
+        if not selected_directory:
+            return
+
+        self.logging_output_dir = Path(selected_directory)
+        directory_text = str(self.logging_output_dir)
+        self.logging_directory_label.setText(directory_text)
+        self.logging_directory_label.setToolTip(directory_text)
+
+    def _toggle_logging(self) -> None:
+        if self.logger_process.state() == QProcess.ProcessState.NotRunning:
+            self._start_logging()
+        else:
+            self._stop_logging()
+
+    def _start_logging(self) -> None:
+        try:
+            self.logging_output_dir.mkdir(parents=True, exist_ok=True)
+        except OSError as error:
+            print(f"LOGGER START FAILED: {error}")
+            self._show_logger_error("Could not start telemetry logging.")
+            return
+
+        self.logger_stop_requested = False
+        self.logger_error_reported = False
+        self._update_logging_ui("starting")
+        self.logger_process.setWorkingDirectory(str(PROJECT_ROOT))
+        self.logger_process.setProgram(sys.executable)
+        self.logger_process.setArguments(
+            [
+                "-m",
+                "src.ingestion.shared_memory_logger",
+                "--output-dir",
+                str(self.logging_output_dir),
+            ]
+        )
+        self.logger_process.start()
+
+    def _stop_logging(self) -> None:
+        if self.logger_process.state() == QProcess.ProcessState.NotRunning:
+            self._update_logging_ui("stopped")
+            return
+
+        self.logger_stop_requested = True
+        self.logger_process.write(b"stop\n")
+        self.logger_process.waitForBytesWritten(500)
+
+        if not self.logger_process.waitForFinished(3000):
+            print("LOGGER STOP: stop command timed out; terminating process")
+            self.logger_process.terminate()
+
+            if not self.logger_process.waitForFinished(1500):
+                print("LOGGER STOP: termination timed out; killing process")
+                self.logger_process.kill()
+                self.logger_process.waitForFinished(1000)
+
+        self._update_logging_ui("stopped")
+
+    def _on_logger_started(self) -> None:
+        print(f"LOGGER STARTED: output directory {self.logging_output_dir}")
+        self._update_logging_ui("recording")
+
+    def _on_logger_error(self, error) -> None:
+        print(f"LOGGER PROCESS ERROR: {self.logger_process.errorString()}")
+
+        if (
+            error == QProcess.ProcessError.FailedToStart
+            and not self.logger_stop_requested
+        ):
+            self.logger_error_reported = True
+            self._update_logging_ui("stopped")
+            self._show_logger_error("Could not start telemetry logging.")
+
+    def _on_logger_finished(self, exit_code: int, exit_status) -> None:
+        stopped_intentionally = self.logger_stop_requested
+        self._update_logging_ui("stopped")
+
+        if not stopped_intentionally and not self.logger_error_reported:
+            print(
+                "LOGGER EXITED UNEXPECTEDLY: "
+                f"code={exit_code}, status={exit_status}"
+            )
+            self._show_logger_error("Telemetry logging stopped unexpectedly.")
+
+        self.logger_stop_requested = False
+        self.logger_error_reported = False
+
+    def _update_logging_ui(self, state: str) -> None:
+        if state == "recording":
+            self.logging_toggle_button.setText("Stop logging")
+            self.logging_toggle_button.setEnabled(True)
+            self.choose_logging_folder_button.setEnabled(False)
+            self.logging_status_label.setText("Status: Recording...")
+        elif state == "starting":
+            self.logging_toggle_button.setText("Starting...")
+            self.logging_toggle_button.setEnabled(False)
+            self.choose_logging_folder_button.setEnabled(False)
+            self.logging_status_label.setText("Status: Starting...")
+        else:
+            self.logging_toggle_button.setText("Start logging")
+            self.logging_toggle_button.setEnabled(True)
+            self.choose_logging_folder_button.setEnabled(True)
+            self.logging_status_label.setText("Status: Not logging")
+
+    def _show_logger_error(self, message: str) -> None:
+        QMessageBox.critical(self, "Telemetry logging", message)
+
     def _open_session(self) -> None:
+        initial_directory = (
+            self.current_session_path.parent
+            if self.current_session_path is not None
+            else self.logging_output_dir
+        )
         selected_path, _selected_filter = QFileDialog.getOpenFileName(
             self,
             "Open telemetry session",
-            str(self.current_session_path.parent),
+            str(initial_directory),
             "CSV files (*.csv);;All files (*)",
         )
 
@@ -224,18 +378,27 @@ class MainWindow(QMainWindow):
 
         try:
             candidate = self._load_session_candidate(Path(selected_path))
-            self._commit_session(candidate)
-        except Exception as error:
-            QMessageBox.critical(
-                self,
-                "Unable to open session",
-                "The selected telemetry session could not be loaded.\n\n"
-                f"{error}",
-            )
+        except Exception:
+            self._show_session_load_error()
             return
 
+        try:
+            self._commit_session(candidate)
+        except Exception as error:
+            print(f"SESSION COMMIT FAILED: {error}")
+            self._show_session_load_error()
+
+    def _show_session_load_error(self) -> None:
+        QMessageBox.critical(
+            self,
+            "Unable to open session",
+            "The selected telemetry session could not be loaded.\n\n"
+            "This recording does not contain enough usable "
+            "completed-lap telemetry.",
+        )
+
     def _load_session_candidate(self, path: Path):
-        return self.telemetry_session.load_session_candidate(path)
+        return load_session_candidate(path)
 
     def _commit_session(self, candidate) -> None:
         session_lap_entries = candidate.get_telemetry_lap_entries()
@@ -249,6 +412,7 @@ class MainWindow(QMainWindow):
         reference_entries = candidate.get_telemetry_lap_legend_entries(
             selected_reference_lap
         )
+        section_numbers = candidate.get_telemetry_section_numbers()
         candidate_figure = candidate.create_telemetry_figure()
 
         if not isinstance(candidate_figure.canvas, FigureCanvas):
@@ -282,6 +446,7 @@ class MainWindow(QMainWindow):
             lap_number
             for lap_number, _label, _color, _is_reference in reference_entries
         )
+        self.section_numbers = section_numbers
 
         self._replace_telemetry_viewer(candidate, channel_states)
         self._rebuild_lap_rows()
@@ -320,12 +485,21 @@ class MainWindow(QMainWindow):
         self.compare_combo_box.blockSignals(False)
 
         self.section_combo_box.blockSignals(True)
+        self.section_combo_box.clear()
+        self.section_combo_box.addItems(
+            [self.SECTION_PLACEHOLDER]
+            + [
+                f"Section {section_number}"
+                for section_number in self.section_numbers
+            ]
+        )
         self.section_combo_box.setCurrentText(self.SECTION_PLACEHOLDER)
         self.section_combo_box.blockSignals(False)
 
         self.pair_only_control.blockSignals(True)
         self.pair_only_control.setChecked(True)
         self.pair_only_control.blockSignals(False)
+        self._set_session_controls_enabled(True)
 
     def _rebuild_lap_rows(self) -> None:
         while self.laps_layout.count():
@@ -355,6 +529,9 @@ class MainWindow(QMainWindow):
             )
 
     def _on_reference_changed(self, value: str) -> None:
+        if self.telemetry_session is None:
+            return
+
         previous_pair_laps = self._selected_pair_laps()
         self.selected_reference_lap = self._lap_number_from_text(value)
         self._refresh_compare_options()
@@ -371,6 +548,9 @@ class MainWindow(QMainWindow):
         self._update_state_readout()
 
     def _on_compare_changed(self, value: str) -> None:
+        if self.telemetry_session is None:
+            return
+
         previous_pair_laps = self._selected_pair_laps()
         self.selected_compare_lap = self._lap_number_from_text(value)
         self._apply_pair_only_visibility(
@@ -390,6 +570,9 @@ class MainWindow(QMainWindow):
         }
 
     def _set_pair_only_enabled(self, enabled: bool) -> None:
+        if self.telemetry_session is None:
+            return
+
         if enabled:
             self.normal_lap_visibility = {
                 lap_number: control.isChecked()
@@ -453,12 +636,27 @@ class MainWindow(QMainWindow):
         self.set_telemetry_lap_visibility(lap_number, visible)
 
     def _on_section_changed(self, value: str) -> None:
+        if self.telemetry_session is None:
+            return
+
         if value == self.SECTION_PLACEHOLDER:
             self.selected_section = None
             self.restore_telemetry_full_lap_view()
         else:
-            self.selected_section = int(value.split()[-1])
-            self.zoom_to_telemetry_section(self.selected_section)
+            try:
+                section_number = int(value.split()[-1])
+            except (IndexError, ValueError):
+                section_number = None
+
+            if section_number not in self.section_numbers:
+                self.selected_section = None
+                self.section_combo_box.blockSignals(True)
+                self.section_combo_box.setCurrentText(self.SECTION_PLACEHOLDER)
+                self.section_combo_box.blockSignals(False)
+                self.restore_telemetry_full_lap_view()
+            else:
+                self.selected_section = section_number
+                self.zoom_to_telemetry_section(self.selected_section)
 
         self._update_state_readout()
         self.refresh_analysis_panel()
@@ -511,6 +709,9 @@ class MainWindow(QMainWindow):
         self.selected_compare_lap = selected_compare_lap
 
     def _request_pair_analysis(self) -> None:
+        if self.telemetry_session is None:
+            return
+
         if (
             self.selected_reference_lap is None
             or self.selected_compare_lap is None
@@ -607,8 +808,23 @@ class MainWindow(QMainWindow):
         panel.setObjectName("workspacePanel")
         self.telemetry_panel = panel
         self.telemetry_layout = layout
-        self._install_telemetry_viewer(self.telemetry_session)
+        self._install_empty_telemetry_viewer()
         return panel
+
+    def _install_empty_telemetry_viewer(self) -> None:
+        self.telemetry_figure = Figure(facecolor="black")
+        self.telemetry_canvas = FigureCanvas(self.telemetry_figure)
+        self.telemetry_toolbar = NavigationToolbar(
+            self.telemetry_canvas,
+            self.telemetry_panel,
+        )
+        self.telemetry_toolbar.setObjectName("telemetryToolbar")
+        self.telemetry_channel_controls = self._create_channel_visibility_controls(
+            lambda _channel, _visible: None
+        )
+        self.telemetry_layout.addWidget(self.telemetry_toolbar)
+        self.telemetry_layout.addWidget(self.telemetry_channel_controls)
+        self.telemetry_layout.addWidget(self.telemetry_canvas, 1)
 
     def _install_telemetry_viewer(
         self,
@@ -803,6 +1019,14 @@ class MainWindow(QMainWindow):
 
             if widget is not None:
                 widget.deleteLater()
+
+        if self.telemetry_session is None:
+            self._add_analysis_label(
+                "Open a session to begin.",
+                "analysisEmptyState",
+            )
+            self.analysis_content_layout.addStretch(1)
+            return
 
         if self.current_pair_analysis is None:
             self._add_analysis_label(
@@ -1060,6 +1284,12 @@ class MainWindow(QMainWindow):
             )
 
         return f"Lap {self.selected_compare_lap} - {difference_text}"
+
+    def closeEvent(self, event) -> None:
+        if self.logger_process.state() != QProcess.ProcessState.NotRunning:
+            self._stop_logging()
+
+        super().closeEvent(event)
 
     @staticmethod
     def _create_panel(title: str) -> tuple[QFrame, QVBoxLayout]:

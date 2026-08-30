@@ -185,10 +185,28 @@ class MainWindow(QMainWindow):
         self.lap_visibility_controls = {}
         self.lap_rows = {}
         self.laps_container = QWidget()
+        self.laps_container.setObjectName("lapsContainer")
         self.laps_layout = QVBoxLayout(self.laps_container)
         self.laps_layout.setContentsMargins(0, 0, 0, 0)
         self.laps_layout.setSpacing(6)
-        layout.addWidget(self.laps_container)
+        self.laps_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
+
+        self.laps_scroll_area = QScrollArea()
+        self.laps_scroll_area.setObjectName("lapsScrollArea")
+        self.laps_scroll_area.setWidgetResizable(True)
+        self.laps_scroll_area.setVerticalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAsNeeded
+        )
+        self.laps_scroll_area.setHorizontalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+        )
+        self.laps_scroll_area.setFrameShape(QFrame.Shape.NoFrame)
+        self.laps_scroll_area.setSizePolicy(
+            QSizePolicy.Policy.Expanding,
+            QSizePolicy.Policy.Expanding,
+        )
+        self.laps_scroll_area.setWidget(self.laps_container)
+        layout.addWidget(self.laps_scroll_area, 1)
         self._rebuild_lap_rows()
 
         layout.addSpacing(4)
@@ -238,7 +256,6 @@ class MainWindow(QMainWindow):
         )
         self._update_state_readout()
 
-        layout.addStretch(1)
         return panel
 
     def _set_session_controls_enabled(self, enabled: bool) -> None:

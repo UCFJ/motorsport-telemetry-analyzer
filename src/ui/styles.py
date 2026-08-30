@@ -242,6 +242,9 @@ QLabel#inspectionPlaceholder {
     padding: 5px 1px;
 }
 
+QWidget#lapsContainer,
+QScrollArea#lapsScrollArea,
+QScrollArea#lapsScrollArea QWidget#qt_scrollarea_viewport,
 QWidget#analysisModeControls,
 QWidget#analysisContent,
 QScrollArea#analysisScrollArea,

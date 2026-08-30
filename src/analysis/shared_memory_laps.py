@@ -90,6 +90,7 @@ def format_lap_time(milliseconds):
 
 
 REQUIRED_SESSION_COLUMNS = (
+    "timestamp_s",
     "lap_number",
     "is_valid_lap",
     "completed_laps",
@@ -114,6 +115,8 @@ ALIGNMENT_COLUMNS = (
     "world_x",
     "world_z",
 )
+
+COMPLETION_EVENT_WINDOW_S = 1.0
 
 
 def prepare_session_rows(session_df):
@@ -161,6 +164,10 @@ def prepare_session_rows(session_df):
     prepared_df["lap_number"] = (
         lap_numbers.loc[usable_identifiers].astype(int)
     )
+    prepared_df["timestamp_s"] = pd.to_numeric(
+        prepared_df["timestamp_s"],
+        errors="coerce",
+    )
     prepared_df["completed_laps"] = pd.to_numeric(
         prepared_df["completed_laps"],
         errors="coerce",
@@ -195,11 +202,106 @@ def prepare_lap_rows(lap):
     return prepared_lap.reset_index(drop=True), is_valid and has_usable_samples
 
 
+def detect_acc_completion_events(session_df):
+    """Return usable rows where ACC's completed-lap counter increases."""
+    events = []
+    previous_completed_laps = None
+
+    for timestamp, completed_laps, lap_time_ms in session_df[
+        ["timestamp_s", "completed_laps", "acc_last_lap_ms"]
+    ].itertuples(index=False, name=None):
+        if pd.isna(completed_laps) or not np.isfinite(completed_laps):
+            continue
+
+        if (
+            previous_completed_laps is not None
+            and completed_laps > previous_completed_laps
+            and pd.notna(timestamp)
+            and np.isfinite(timestamp)
+            and pd.notna(lap_time_ms)
+            and np.isfinite(lap_time_ms)
+            and 0 < lap_time_ms < 2147483647
+        ):
+            events.append(
+                {
+                    "timestamp_s": float(timestamp),
+                    "completed_laps": int(completed_laps),
+                    "lap_time_ms": int(lap_time_ms),
+                }
+            )
+
+        previous_completed_laps = completed_laps
+
+    return events
+
+
+def detect_local_lap_boundaries(session_df):
+    """Map each recorded local lap ID to its following transition timestamp."""
+    boundaries = {}
+    previous_lap_number = None
+
+    for timestamp, lap_number in session_df[
+        ["timestamp_s", "lap_number"]
+    ].itertuples(index=False, name=None):
+        if previous_lap_number is None:
+            previous_lap_number = lap_number
+            continue
+
+        if lap_number == previous_lap_number:
+            continue
+
+        if pd.notna(timestamp) and np.isfinite(timestamp):
+            boundaries.setdefault(previous_lap_number, float(timestamp))
+
+        previous_lap_number = lap_number
+
+    return boundaries
+
+
+def match_completion_event(
+    boundary_timestamp,
+    completion_events,
+    used_event_indexes,
+):
+    """Choose the nearest unused ACC event within the boundary tolerance."""
+    candidates = [
+        (
+            abs(event["timestamp_s"] - boundary_timestamp),
+            event_index,
+            event,
+        )
+        for event_index, event in enumerate(completion_events)
+        if event_index not in used_event_indexes
+        and abs(event["timestamp_s"] - boundary_timestamp)
+        <= COMPLETION_EVENT_WINDOW_S
+    ]
+
+    if not candidates:
+        return None
+
+    if len(candidates) > 1:
+        print(
+            "LAP COMPLETION: multiple ACC events near boundary; "
+            "using the closest"
+        )
+
+    _distance, event_index, event = min(
+        candidates,
+        key=lambda candidate: (candidate[0], candidate[1]),
+    )
+    used_event_indexes.add(event_index)
+    return event
+
+
 df = load_shared_memory_csv(CSV_FILE)
 df = prepare_session_rows(df)
 
-max_lap_number = int(
-    df["lap_number"].max()
+completion_events = detect_acc_completion_events(df)
+local_lap_boundaries = detect_local_lap_boundaries(df)
+local_lap_numbers = sorted(
+    int(lap_number)
+    for lap_number in df["lap_number"].unique()
+    if lap_number >= 1
 )
 
 
@@ -209,10 +311,7 @@ max_lap_number = int(
 
 laps = {}
 
-for lap_number in range(
-    1,
-    max_lap_number
-):
+for lap_number in local_lap_numbers:
 
     lap = df[
         df["lap_number"] == lap_number
@@ -230,34 +329,47 @@ for lap_number in range(
 # -------------------------
 
 lap_info = []
+used_completion_event_indexes = set()
 
 for lap_number, lap in laps.items():
 
     lap, is_valid = prepare_lap_rows(lap)
     laps[lap_number] = lap
 
-    next_lap = df[
-        df["lap_number"]
-        == lap_number + 1
-    ]
+    boundary_timestamp = local_lap_boundaries.get(lap_number)
+    completion_event = (
+        match_completion_event(
+            boundary_timestamp,
+            completion_events,
+            used_completion_event_indexes,
+        )
+        if boundary_timestamp is not None
+        else None
+    )
 
-    completed_rows = next_lap[
-        next_lap["completed_laps"]
-        >= lap_number
-    ]
-
-    lap_time_values = completed_rows["acc_last_lap_ms"]
-    usable_lap_times = lap_time_values[
-        lap_time_values.notna() & np.isfinite(lap_time_values)
-    ]
-
-    if usable_lap_times.empty:
-
+    if completion_event is None:
         lap_time_ms = None
-
+        if boundary_timestamp is None:
+            print(
+                f"LAP COMPLETION: local Lap {lap_number} "
+                "had no following local boundary"
+            )
+        else:
+            print(
+                f"LAP COMPLETION: local Lap {lap_number} "
+                "had no completion event"
+            )
     else:
-
-        lap_time_ms = int(usable_lap_times.iloc[0])
+        lap_time_ms = completion_event["lap_time_ms"]
+        event_offset = (
+            completion_event["timestamp_s"]
+            - boundary_timestamp
+        )
+        print(
+            f"LAP COMPLETION: local Lap {lap_number} matched ACC "
+            f"completion event {event_offset:+.3f} s, "
+            f"time {lap_time_ms} ms"
+        )
 
     lap_info.append(
         {

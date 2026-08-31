@@ -2,6 +2,8 @@
 
 from pathlib import Path
 import sys
+import tempfile
+import uuid
 
 from matplotlib.backends.backend_qtagg import (
     FigureCanvasQTAgg as FigureCanvas,
@@ -70,6 +72,7 @@ class MainWindow(QMainWindow):
         self.logging_output_dir = get_default_shared_memory_output_dir()
         self.logger_stop_requested = False
         self.logger_error_reported = False
+        self.logger_stop_file = None
         self.logger_process = QProcess(self)
         self.logger_process.setProcessChannelMode(
             QProcess.ProcessChannelMode.ForwardedChannels
@@ -297,6 +300,8 @@ class MainWindow(QMainWindow):
             self._stop_logging()
 
     def _start_logging(self) -> None:
+        self._clear_logger_stop_file()
+
         try:
             self.logging_output_dir.mkdir(parents=True, exist_ok=True)
         except OSError as error:
@@ -309,24 +314,43 @@ class MainWindow(QMainWindow):
         self._update_logging_ui("starting")
         self.logger_process.setWorkingDirectory(str(PROJECT_ROOT))
         self.logger_process.setProgram(sys.executable)
-        self.logger_process.setArguments(
-            [
+        if getattr(sys, "frozen", False):
+            self.logger_stop_file = (
+                Path(tempfile.gettempdir())
+                / f"motorsport-telemetry-{uuid.uuid4().hex}.stop"
+            )
+            logger_arguments = [
+                "--logger",
+                "--output-dir",
+                str(self.logging_output_dir),
+                "--stop-file",
+                str(self.logger_stop_file),
+            ]
+        else:
+            logger_arguments = [
                 "-m",
                 "src.ingestion.shared_memory_logger",
                 "--output-dir",
                 str(self.logging_output_dir),
             ]
-        )
+        self.logger_process.setArguments(logger_arguments)
         self.logger_process.start()
 
     def _stop_logging(self) -> None:
         if self.logger_process.state() == QProcess.ProcessState.NotRunning:
+            self._clear_logger_stop_file()
             self._update_logging_ui("stopped")
             return
 
         self.logger_stop_requested = True
-        self.logger_process.write(b"stop\n")
-        self.logger_process.waitForBytesWritten(500)
+        if self.logger_stop_file is None:
+            self.logger_process.write(b"stop\n")
+            self.logger_process.waitForBytesWritten(500)
+        else:
+            try:
+                self.logger_stop_file.touch(exist_ok=True)
+            except OSError as error:
+                print(f"LOGGER STOP FILE FAILED: {error}")
 
         if not self.logger_process.waitForFinished(3000):
             print("LOGGER STOP: stop command timed out; terminating process")
@@ -337,6 +361,7 @@ class MainWindow(QMainWindow):
                 self.logger_process.kill()
                 self.logger_process.waitForFinished(1000)
 
+        self._clear_logger_stop_file()
         self._update_logging_ui("stopped")
 
     def _on_logger_started(self) -> None:
@@ -351,11 +376,13 @@ class MainWindow(QMainWindow):
             and not self.logger_stop_requested
         ):
             self.logger_error_reported = True
+            self._clear_logger_stop_file()
             self._update_logging_ui("stopped")
             self._show_logger_error("Could not start telemetry logging.")
 
     def _on_logger_finished(self, exit_code: int, exit_status) -> None:
         stopped_intentionally = self.logger_stop_requested
+        self._clear_logger_stop_file()
         self._update_logging_ui("stopped")
 
         if not stopped_intentionally and not self.logger_error_reported:
@@ -367,6 +394,18 @@ class MainWindow(QMainWindow):
 
         self.logger_stop_requested = False
         self.logger_error_reported = False
+
+    def _clear_logger_stop_file(self) -> None:
+        stop_file = self.logger_stop_file
+        self.logger_stop_file = None
+
+        if stop_file is None:
+            return
+
+        try:
+            stop_file.unlink()
+        except FileNotFoundError:
+            pass
 
     def _update_logging_ui(self, state: str) -> None:
         if state == "recording":

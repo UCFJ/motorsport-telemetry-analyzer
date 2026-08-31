@@ -13,6 +13,16 @@ from src.ingestion.paths import get_default_shared_memory_output_dir
 FLUSH_EVERY_ROWS = 25
 
 
+def remove_stop_file(stop_file):
+    if stop_file is None:
+        return
+
+    try:
+        stop_file.unlink()
+    except FileNotFoundError:
+        pass
+
+
 def listen_for_stop_command(stop_event):
     """Watch stdin for the UI's simple graceful-stop command."""
     for line in sys.stdin:
@@ -61,15 +71,17 @@ FIELDNAMES = [
 ]
 
 
-def record_session(output_file, sample_interval=0.01):
+def record_session(output_file, sample_interval=0.01, stop_file=None):
     asm = accSharedMemory()
     stop_event = threading.Event()
-    stop_listener = threading.Thread(
-        target=listen_for_stop_command,
-        args=(stop_event,),
-        daemon=True,
-    )
-    stop_listener.start()
+
+    if stop_file is None:
+        stop_listener = threading.Thread(
+            target=listen_for_stop_command,
+            args=(stop_event,),
+            daemon=True,
+        )
+        stop_listener.start()
 
     start_time = time.perf_counter()
     lap_number = 0
@@ -98,6 +110,10 @@ def record_session(output_file, sample_interval=0.01):
 
         try:
             while not stop_event.is_set():
+                if stop_file is not None and stop_file.exists():
+                    stop_event.set()
+                    continue
+
                 data = asm.read_shared_memory()
 
                 if data is None:
@@ -176,6 +192,7 @@ def record_session(output_file, sample_interval=0.01):
         finally:
             file.flush()
             asm.close()
+            remove_stop_file(stop_file)
 
 
 def parse_args(argv=None):
@@ -186,26 +203,39 @@ def parse_args(argv=None):
         default=get_default_shared_memory_output_dir(),
         help="Directory in which to create the telemetry session CSV.",
     )
+    parser.add_argument(
+        "--stop-file",
+        type=Path,
+        help="Optional file whose appearance requests a graceful stop.",
+    )
     return parser.parse_args(argv)
 
 
 def main(argv=None):
     args = parse_args(argv)
     output_dir = args.output_dir.expanduser().resolve()
-    output_dir.mkdir(parents=True, exist_ok=True)
-    filename = (
-        "acc_session_"
-        + time.strftime("%Y%m%d_%H%M%S")
-        + ".csv"
+    stop_file = (
+        args.stop_file.expanduser().resolve()
+        if args.stop_file is not None
+        else None
     )
+    try:
+        output_dir.mkdir(parents=True, exist_ok=True)
+        filename = (
+            "acc_session_"
+            + time.strftime("%Y%m%d_%H%M%S")
+            + ".csv"
+        )
 
-    output_file = output_dir / filename
+        output_file = output_dir / filename
 
-    print("Saving to:")
-    print(output_file)
-    print()
+        print("Saving to:")
+        print(output_file)
+        print()
 
-    record_session(output_file)
+        record_session(output_file, stop_file=stop_file)
+    finally:
+        remove_stop_file(stop_file)
 
 
 if __name__ == "__main__":

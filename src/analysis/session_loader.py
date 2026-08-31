@@ -2,26 +2,37 @@
 
 import importlib.util
 from pathlib import Path
+from types import CodeType, ModuleType
 
 
-SESSION_MODULE_PATH = Path(__file__).with_name("shared_memory_laps.py")
+SESSION_MODULE_NAME = "src.analysis.shared_memory_laps"
+CANDIDATE_MODULE_NAME = "src.analysis.shared_memory_laps_candidate"
+
+
+def _create_session_candidate() -> tuple[ModuleType, CodeType]:
+    """Create a fresh module from the installed or bundled analysis code."""
+    source_spec = importlib.util.find_spec(SESSION_MODULE_NAME)
+    loader = source_spec.loader if source_spec is not None else None
+    code = loader.get_code(SESSION_MODULE_NAME) if loader is not None else None
+
+    if source_spec is None or loader is None or code is None:
+        raise RuntimeError("The telemetry session loader is unavailable.")
+
+    candidate = ModuleType(CANDIDATE_MODULE_NAME)
+    candidate.__file__ = source_spec.origin
+    candidate.__loader__ = loader
+    candidate.__package__ = source_spec.parent
+    candidate.__spec__ = source_spec
+    return candidate, code
 
 
 def load_session_candidate(path: Path):
     """Build and validate an isolated analysis session for one CSV."""
-    spec = importlib.util.spec_from_file_location(
-        "src.analysis.shared_memory_laps_candidate",
-        SESSION_MODULE_PATH,
-    )
-
-    if spec is None or spec.loader is None:
-        raise RuntimeError("The telemetry session loader is unavailable.")
-
-    candidate = importlib.util.module_from_spec(spec)
+    candidate, code = _create_session_candidate()
     candidate.CSV_FILE = Path(path)
 
     try:
-        spec.loader.exec_module(candidate)
+        exec(code, candidate.__dict__)
         entries = candidate.get_telemetry_lap_entries()
 
         if not entries or not any(entry[3] for entry in entries):

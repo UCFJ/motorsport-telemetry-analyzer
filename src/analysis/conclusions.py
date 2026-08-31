@@ -71,46 +71,6 @@ def format_application_count(
     )
 
 
-def format_full_lift(
-    lap_full_lift,
-    reference_full_lift
-):
-
-    if (
-        lap_full_lift
-        and reference_full_lift
-    ):
-
-        return (
-            "You and the reference "
-            "both fully lifted."
-        )
-
-    if (
-        lap_full_lift
-        and not reference_full_lift
-    ):
-
-        return (
-            "You fully lifted; "
-            "the reference did not."
-        )
-
-    if (
-        not lap_full_lift
-        and reference_full_lift
-    ):
-
-        return (
-            "The reference fully lifted; "
-            "you did not."
-        )
-
-    return (
-        "Neither lap fully lifted."
-    )
-
-
 def format_coasting_distance(
     value
 ):

@@ -1,442 +1,105 @@
-# Motorsport Telemetry Performance Analyzer — Project State
+# Motorsport Telemetry Performance Analyzer: Project State
 
-## Current Goal
+## V1 Status
 
-Build a portfolio-ready v1 motorsport telemetry analysis application using Assetto Corsa Competizione telemetry.
+V1 is complete after final automated validation. The application is a recorded-session ACC telemetry analyzer, not a live analysis system or automated driving coach.
 
-The program is intended as an engineering analysis tool, not an automated driving coach.
+Launch command:
 
-The software measures and presents telemetry differences. It does not give driving recommendations.
-
----
-
-# V1 Architecture
-
-The application has three core functions.
-
-## Function 1 — Viewer
-
-Interactive telemetry visualization.
-
-Current features include:
-
-* Speed
-* Delta
-* Brake
-* Throttle
-* Steering
-* Racing-line deviation
-* Racing-line map
-* Lap visibility controls
-* Reference lap selection
-* Automatically detected analysis sections
-* Section labels
-* Zoom and pan
-* Dark visual theme
-
-Alignment uses 5000 spatially aligned points.
-
-Visualization telemetry lines are downsampled with:
-
-```python
-PLOT_STEP = 4
+```powershell
+python -m src.ui.app
 ```
 
-This affects plotting only.
+Windows virtual-environment command:
 
-All analysis continues to use the full 5000-point aligned data.
-
-The racing-line map remains full resolution.
-
----
-
-## Function 2 — Observations
-
-File:
-
-```text
-src/analysis/observations.py
+```powershell
+.venv\Scripts\python.exe -m src.ui.app
 ```
 
-Function 2 is the numerical source of truth.
+## Current Workflow
 
-ALL telemetry measurements and derived engineering metrics must be calculated in Function 2.
+1. `src/ingestion/shared_memory_logger.py` records ACC shared-memory data.
+2. Recordings are saved as `acc_session_YYYYMMDD_HHMMSS.csv` files.
+3. The UI loads and validates a selected session without replacing the current session until commit succeeds.
+4. Completed valid laps are spatially aligned to 5000 common-position points.
+5. Reference-lap geometry produces track-agnostic analysis sections.
+6. The user selects Reference, Compare, and optionally Section.
+7. Ordered-pair analysis is calculated lazily and cached.
+8. Function 2 measurements appear in Raw mode; Function 3 wording appears in Summary mode.
 
-Function 3 must never introduce a measurement that does not already exist in Function 2.
+Analysis is offline. Logging and analysis are independent, so a recording can continue while an existing session is inspected.
 
-Current section observations include:
+## Lap Completion and Eligibility
 
-### Time
+- Logger-generated local lap IDs are preserved and may be non-contiguous.
+- Increases in ACC's `completed_laps` counter provide completion events.
+- Local lap boundaries are matched to nearby ACC completion events.
+- An abandoned or non-counted lap does not consume the later lap's completion event.
+- A final lap without a following boundary is not fabricated as complete.
+- Invalid or incomplete laps cannot become reference laps.
+- Slow valid completed laps remain eligible; no performance-delta filter rejects them.
+- The fastest valid completed lap becomes the initial reference after loading.
 
-* Section delta
+## Section Detection
 
-### Speed
+Sections are inferred from reference-lap geometry and driving-control continuity. The pipeline uses curvature, distance gaps, steering, throttle, brake behavior, braking zones, and exit recovery.
 
-* Minimum speed difference
-* Section-end speed difference
+The detector is track-agnostic. It contains no track names, corner names, fixed normalized-position ranges, or fixed section count.
 
-### Braking
+## Application Architecture
 
-* Brake application count
-* Initial brake onset difference
-* Final brake release difference
+### Function 1: Viewer
 
-### Throttle
+- PySide6 three-panel desktop interface
+- Embedded Matplotlib telemetry viewer
+- Speed, Brake, and Throttle visible by default
+- Optional Delta, Steering, Racing-Line Deviation, and Racing Line channels
+- Dynamic valid-lap and section controls
+- Independently scrollable lap-row area
+- Reference, Compare, and Section controls remain fixed outside that area
+- Pair only enabled by default after session load
+- Section zoom, full-lap restore, pan, and zoom
 
-* Throttle application count
-* Full lift
-* Coasting distance
-* Final throttle application onset
-* Full/high-throttle reached
-* Additional post-full-throttle lift count
-* Post-full-throttle minimum throttle where relevant
+Reference and Compare selection controls analysis identity. Plot checkboxes control visibility independently. Pair only temporarily restricts visibility to the selected pair and restores normal per-lap visibility when disabled.
 
-### Racing Line
+### Function 2: Observations
 
-* Peak signed racing-line deviation
+File: `src/analysis/observations.py`
 
-Signed racing-line convention:
+Function 2 is the numerical source of truth. It calculates section time and speed differences, brake and throttle events, coasting, throttle commitment and lift behavior, and signed racing-line deviation.
 
-* Negative = driver's left of reference
-* Positive = driver's right of reference
+### Function 3: Conclusions
 
-User-facing output converts this to left/right wording.
+File: `src/analysis/conclusions.py`
 
----
+Function 3 is a presentation layer. It reads Function 2 values, applies display thresholds, rounds values, converts signs into wording, and groups statements. It does not inspect raw telemetry, calculate new engineering metrics, give driving advice, or make causal claims.
 
-# Coasting Definition
+### Pair Analysis
 
-Coasting is measured when:
+Analysis is keyed by the ordered pair `(reference_lap, comparison_lap)`. Selecting a valid pair calculates deltas, line deviation, observations, and conclusions only when that ordered pair is absent from the session cache.
 
-```python
-throttle <= 0.10
-and
-brake <= 0.10
-```
+Raw and Summary are two views of the same pair result:
 
-Function 2 stores:
+- Raw shows Function 2 measurements.
+- Summary shows Function 3 wording.
 
-* lap coasting distance
-* reference coasting distance
-* coasting-distance difference
+## Data and Runtime Boundaries
 
-Positive difference:
+- V1 input is ACC shared-memory CSV telemetry.
+- V1 calculations use the full 5000-point spatial alignment.
+- `PLOT_STEP` affects display sampling only.
+- MoTeC `.ld` and `.ldx` support is not required or used by the v1 runtime.
+- Legacy MoTeC and experiment files remain in the repository but are outside the application path.
+- The application does not generate driving recommendations or causal diagnoses.
 
-```text
-comparison lap coasted for more distance
-```
+## V2 Candidates
 
-Negative difference:
+These are possible future directions, not unfinished v1 requirements:
 
-```text
-comparison lap coasted for less distance
-```
-
-Full lift remains available as a raw Function 2 metric, but is not currently shown in Function 3 because coasting is more useful in the engineer-facing summary.
-
----
-
-# Function 3 — Engineer Summary
-
-File:
-
-```text
-src/analysis/conclusions.py
-```
-
-Function 3 is strictly a wording and presentation layer on top of Function 2.
-
-It does NOT:
-
-* inspect raw telemetry arrays
-* detect telemetry events
-* calculate distances
-* calculate speed differences
-* calculate section deltas
-* calculate application-count differences
-* create new engineering metrics
-* give driving advice
-* make causal claims
-
-It may:
-
-* read values from the Function 2 observation dictionary
-* inspect signs
-* compare values against presentation thresholds
-* round values
-* use `abs()`
-* convert signs into earlier/later, higher/lower, left/right
-* group statements
-* omit insignificant values
-* format sentences
-
-Current presentation-only thresholds:
-
-```python
-SPEED_DISPLAY_THRESHOLD = 1.0
-POSITION_DISPLAY_THRESHOLD = 1.0
-COASTING_DISPLAY_THRESHOLD = 1.0
-LINE_DISPLAY_THRESHOLD = 0.5
-TIME_DISPLAY_THRESHOLD = 0.020
-```
-
-These thresholds affect only what Function 3 displays.
-
-They do not alter Function 2 measurements or telemetry analysis.
-
-Function 3 output is grouped into:
-
-* SPEED
-* BRAKING
-* THROTTLE
-* RACING LINE
-
-Example:
-
-```text
-Section 1 — Lost 0.503 s
-
-SPEED
-  • Minimum speed: 17.6 km/h lower.
-
-BRAKING
-  • Brake onset: 3.4 m earlier.
-  • Brake release: 3.5 m later.
-
-THROTTLE
-  • Coasting: 2.4 m less.
-  • Final throttle application: 16.5 m later.
-  • Full throttle reached: 3.4 m later.
-
-RACING LINE
-  • Peak line deviation: 2.4 m left.
-```
-
-Function 3 is considered complete/frozen for v1 unless a genuine bug is found.
-
----
-
-# Core Product Principle
-
-The software should separate:
-
-```text
-measurement
-from
-interpretation
-from
-driving advice
-```
-
-For v1:
-
-* Function 2 = measurement
-* Function 3 = concise wording of those measurements
-* Driving advice is not generated by the software
-
-The user/engineer remains responsible for interpretation and decisions.
-
----
-
-# Section Detection
-
-Sections are detected automatically from reference-lap geometry.
-
-The implementation must remain track-agnostic.
-
-No Monza-specific or manually hard-coded corner rules should be added.
-
-Current Monza detection produces seven useful analysis sections and is considered sufficient for v1.
-
----
-
-# Lap Rules
-
-Invalid laps must not become the reference lap.
-
-Current v1 workflow uses clean Practice sessions.
-
-Return-to-Garage and complex partial-lap handling are intentionally outside v1 scope.
-
----
-
-# Front-End Decision
-
-The next development phase is the desktop front-end.
-
-Chosen stack:
-
-```text
-PySide6
-Qt Widgets
-Existing Matplotlib viewer
-Custom dark Qt styling
-```
-
-The existing Matplotlib telemetry viewer should initially be embedded inside the Qt application rather than rewritten.
-
-Possible future plotting upgrade:
-
-```text
-Matplotlib → PyQtGraph
-```
-
-Only consider this if graph performance becomes a real problem.
-
-Do not replace Matplotlib during initial front-end development.
-
----
-
-# Intended Front-End Layout
-
-Approximate layout:
-
-```text
-┌───────────────────────────────────────────────────────────────┐
-│ Motorsport Telemetry Performance Analyzer                    │
-├─────────────┬───────────────────────────────┬─────────────────┤
-│             │                               │                 │
-│ LAPS        │       TELEMETRY VIEWER        │    ANALYSIS     │
-│             │                               │                 │
-│ Lap 5 BEST  │ Speed                         │ Section 1       │
-│ Lap 7       │ Delta                         │ +0.503 s        │
-│ Lap 8       │ Brake                         │                 │
-│             │ Throttle                      │ Raw / Summary   │
-│ Reference   │ Steering                      │                 │
-│ Section     │ Racing line                   │ Function 2 or 3 │
-│             │                               │                 │
-└─────────────┴───────────────────────────────┴─────────────────┘
-```
-
-The user should eventually be able to switch between:
-
-```text
-Raw observations
-Engineer summary
-```
-
-These are two views of the same Function 2 observation data.
-
----
-
-# UI Visual Direction
-
-Clean engineering software rather than gaming UI.
-
-Desired style:
-
-* near-black main background
-* charcoal panels
-* off-white primary text
-* muted secondary text
-* lime reference/best lap
-* existing comparison-lap colors
-* restrained gain/loss indicators
-* subtle borders
-* consistent spacing
-* slightly rounded UI elements
-* no excessive neon or decorative effects
-
-Target feel:
-
-```text
-modern motorsport engineering workstation
-```
-
----
-
-# V1 Scope — Do Not Expand
-
-Do not add these before v1 is finished:
-
-* AI-generated driving advice
-* ideal-lap generation
-* setup recommendations
-* track borders
-* cloud/database infrastructure
-* advanced MoTeC integration
-* traffic detection
-* Return-to-Garage robustness
-* live section analysis
-* live racing-line visualization
-* advanced turn-in detector
-
----
-
-# V2 Candidates
-
-## Live Analysis
-
-Eventually connect the logger directly to the analyzer.
-
-Potential design:
-
-```text
-section completes
-      ↓
-analyze completed section
-      ↓
-update live analysis
-```
-
-Reference lap should update only from completed valid reference-eligible laps.
-
-## Lap Eligibility
-
-Future architecture should distinguish:
-
-```text
-reference_eligible
-analysis_eligible
-display_eligible
-```
-
-Invalid does not necessarily mean useless telemetry.
-
-## Pit Handling
-
-Potential states:
-
-```text
-NORMAL
-INVALIDATED
-PIT_AFFECTED
-INCOMPLETE
-```
-
-Clean completed sections may remain useful even if a later part of the lap becomes invalid or pit-affected.
-
-## Live Racing Line
-
-ACC provides world coordinates:
-
-```text
-world_x
-world_z
-```
-
-These can eventually drive a live racing-line trace and moving vehicle marker.
-
-## Turn-In Detection
-
-Removed from v1 because detection was not sufficiently trustworthy.
-
-May be revisited in v2 with a better distinction between steering input onset and actual trajectory response.
-
----
-
-# Current Next Step
-
-Build the PySide6 front-end.
-
-Initial goal:
-
-1. Create application shell.
-2. Build dark three-panel layout.
-3. Add lap/reference controls.
-4. Embed existing Matplotlib viewer.
-5. Add section selection.
-6. Add Raw Observations / Engineer Summary toggle.
-7. Connect existing Function 2 and Function 3 outputs.
-8. Polish spacing, typography, sizing and interactions.
-9. Package/document the v1 application.
+- Live section and session analysis
+- Live racing-line analysis
+- A validated turn-in detector
+- Separate reference, analysis, and display eligibility concepts if needed
+- Additional pit and partial-lap handling refinements
+- Plot spacing and interaction improvements
+- Possible migration from Matplotlib to a more interactive plotting backend

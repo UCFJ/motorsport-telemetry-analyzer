@@ -1,25 +1,5 @@
 import numpy as np
 
-
-def find_first_threshold_crossing(
-    values,
-    start_index,
-    end_index,
-    threshold
-):
-
-    for i in range(
-        start_index,
-        end_index + 1
-    ):
-
-        if values[i] >= threshold:
-            return i
-
-    return None
-
-
-
 def detect_throttle_applications(
     throttle,
     distance,
@@ -782,9 +762,6 @@ def calculate_section_observations(
         "section_end_speed_difference_kmh":
             section_end_speed_difference,
             
-        "brake_onset_difference_m":
-            brake_onset_difference_m,
-    
         "reference_brake_application_count":
             len(reference_brake_events),
         

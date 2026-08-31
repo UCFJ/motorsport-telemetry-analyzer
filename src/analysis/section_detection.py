@@ -383,6 +383,14 @@ def analyze_section_gaps(
                     )
                 ),
 
+                "min_curvature": np.min(
+                    gap_curvature
+                ),
+
+                "max_signed_curvature": np.max(
+                    gap_curvature
+                ),
+
                 "mean_abs_steering": np.mean(
                     np.abs(
                         gap_steering
@@ -518,7 +526,11 @@ def group_corner_regions(
     sections,
     gap_info,
     max_link_gap_m=80.0,
-    steering_link_threshold=0.05
+    steering_link_threshold=0.05,
+    same_direction_max_gap_m=180.0,
+    continuous_throttle_threshold=0.95,
+    continuous_brake_threshold=0.05,
+    opposite_curvature_tolerance=0.0015
 ):
 
     if not sections:
@@ -554,12 +566,74 @@ def group_corner_regions(
             >= steering_link_threshold
         )
 
-        should_link = (
+        control_active = (
+            gap["min_throttle"]
+            < continuous_throttle_threshold
+            or gap["max_brake"]
+            > continuous_brake_threshold
+        )
+
+        steering_link = (
             short_gap
+            and steering_active
+        )
+
+        direction_change_link = (
+            short_gap
+            and direction_change
             and (
-                direction_change
-                or steering_active
+                steering_active
+                or control_active
             )
+        )
+
+        existing_link = (
+            steering_link
+            or direction_change_link
+        )
+
+        same_direction = (
+            current["direction"]
+            == next_section["direction"]
+        )
+
+        gap_within_same_direction_limit = (
+            gap["gap_m"]
+            <= same_direction_max_gap_m
+        )
+
+        throttle_continuous = (
+            gap["min_throttle"]
+            >= continuous_throttle_threshold
+        )
+
+        brake_inactive = (
+            gap["max_brake"]
+            <= continuous_brake_threshold
+        )
+
+        if current["direction"] == "positive":
+            no_meaningful_opposite_curvature = (
+                gap["min_curvature"]
+                >= -opposite_curvature_tolerance
+            )
+        else:
+            no_meaningful_opposite_curvature = (
+                gap["max_signed_curvature"]
+                <= opposite_curvature_tolerance
+            )
+
+        same_direction_continuous_link = (
+            same_direction
+            and gap_within_same_direction_limit
+            and throttle_continuous
+            and brake_inactive
+            and no_meaningful_opposite_curvature
+        )
+
+        should_link = (
+            existing_link
+            or same_direction_continuous_link
         )
 
         if should_link:
